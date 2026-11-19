@@ -1,5 +1,6 @@
-import { haversineKm, TransitMode } from './airQuality';
-import type { JourneyExplanationPoint, RouteStepSegment } from '../types';
+import { haversineKm } from './airQuality.ts';
+import type { TransitMode } from './airQuality.ts';
+import type { JourneyExplanationPoint, RouteStepSegment } from '../types.ts';
 
 export const SYNC_ROUTE_MAX_KM = 100;
 

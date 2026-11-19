@@ -11,15 +11,17 @@ import {
   computeUpwindViaWaypoint,
   decodeEncodedPolyline,
   estimateTransitDurationMin,
-  GoogleTravelMode,
-  LatLngPoint,
   mapTransitModeToGoogleTravelMode,
   measurePathDistanceKm,
-  RouteCandidateInput,
-  RouteSampleTelemetry,
   samplePathCoordinates,
   selectOptimalLowSmogRoute,
   SYNC_ROUTE_MAX_KM,
+} from './src/utils/routeOptimizer.ts';
+import type {
+  GoogleTravelMode,
+  LatLngPoint,
+  RouteCandidateInput,
+  RouteSampleTelemetry,
 } from './src/utils/routeOptimizer.ts';
 import type { TransitMode } from './src/utils/airQuality.ts';
 import { PAN_INDIA_AQI_STATIONS } from './src/utils/indiaGrid.ts';

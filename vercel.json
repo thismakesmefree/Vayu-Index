@@ -2,18 +2,14 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/index.ts": {
+    "api/**/*.ts": {
       "maxDuration": 30
     }
   },
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/auth/(.*)",
-      "destination": "/api/index"
+      "source": "/auth/:path*",
+      "destination": "/api/auth/:path*"
     },
     {
       "source": "/((?!api/|auth/|assets/|.*\\..*).*)",

@@ -88,6 +88,13 @@ export const OAuthModal: React.FC<OAuthModalProps> = ({
     setError(null);
     try {
       const res = await fetch('/api/auth/url');
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const snippet = (await res.text()).trim().slice(0, 140);
+        throw new Error(
+          `Auth endpoint returned HTTP ${res.status} (${snippet || 'non-JSON response'}). Verify Vercel deployed /api/[...route].ts and vercel.json.`
+        );
+      }
       const data = (await res.json()) as {
         url?: string;
         error?: string;
