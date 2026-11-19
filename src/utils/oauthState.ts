@@ -27,12 +27,6 @@ export function resolveOAuthBaseUrl(
   env: OAuthEnvLike,
   headers?: OAuthHeaderLike
 ): string {
-  const rawAppUrl = (env.APP_URL || '').trim();
-  if (rawAppUrl && rawAppUrl !== 'MY_APP_URL') {
-    const normalized = /^https?:\/\//i.test(rawAppUrl) ? rawAppUrl : `https://${rawAppUrl}`;
-    return normalized.replace(/\/+$/, '');
-  }
-
   const forwardedHost = firstHeaderValue(headers?.['x-forwarded-host']);
   const host = forwardedHost || firstHeaderValue(headers?.host);
   if (host) {
@@ -40,6 +34,12 @@ export function resolveOAuthBaseUrl(
     const isLocalHost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(host);
     const proto = forwardedProto || (isLocalHost ? 'http' : 'https');
     return `${proto}://${host}`.replace(/\/+$/, '');
+  }
+
+  const rawAppUrl = (env.APP_URL || '').trim();
+  if (rawAppUrl && rawAppUrl !== 'MY_APP_URL') {
+    const normalized = /^https?:\/\//i.test(rawAppUrl) ? rawAppUrl : `https://${rawAppUrl}`;
+    return normalized.replace(/\/+$/, '');
   }
 
   const vercelHost = (env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL || '').trim();
