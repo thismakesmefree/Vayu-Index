@@ -200,8 +200,9 @@ export const OAuthModal: React.FC<OAuthModalProps> = ({
                 </div>
                 <p className={tokens.textSecondary}>
                   Add <code className="font-mono-tabular">GOOGLE_CLIENT_ID</code> and{' '}
-                  <code className="font-mono-tabular">GOOGLE_CLIENT_SECRET</code> in AI Studio Secrets,
-                  and register this authorized redirect URI in Google Cloud Console:
+                  <code className="font-mono-tabular">GOOGLE_CLIENT_SECRET</code> in your deployment
+                  environment variables (Vercel / AI Studio Secrets), and register this authorized
+                  redirect URI in Google Cloud Console:
                 </p>
                 <div className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 font-mono-tabular text-[11px] ${tokens.surfaceSubtle} ${tokens.textPrimary}`}>
                   <span className="truncate">{statusInfo.redirectUri}</span>

@@ -24,6 +24,11 @@ import {
 import type { TransitMode } from './src/utils/airQuality.ts';
 import { PAN_INDIA_AQI_STATIONS } from './src/utils/indiaGrid.ts';
 import type { JourneyExplanationPoint, RouteStepSegment } from './src/types.ts';
+import {
+  createSignedOAuthState,
+  resolveOAuthBaseUrl,
+  verifySignedOAuthState,
+} from './src/utils/oauthState.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -170,8 +175,9 @@ function parseRssItems(xml: string) {
   return items;
 }
 
-async function startServer() {
+export function createApiApp(): express.Express {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req, res) => {
@@ -800,18 +806,21 @@ async function startServer() {
     process.env.GOOGLE_CLIENT_SECRET ||
     process.env.OAUTH_CLIENT_SECRET ||
     crypto.randomBytes(32).toString('hex');
-  const pendingOAuthStates = new Map<string, number>();
 
-  const getOAuthConfig = () => {
+  const getOAuthConfig = (req?: express.Request) => {
     const clientId = (process.env.GOOGLE_CLIENT_ID || process.env.OAUTH_CLIENT_ID || '').trim();
     const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || process.env.OAUTH_CLIENT_SECRET || '').trim();
-    const rawAppUrl = (process.env.APP_URL || '').trim();
-    const baseUrl =
-      rawAppUrl && rawAppUrl !== 'MY_APP_URL'
-        ? rawAppUrl.replace(/\/+$/, '')
-        : `http://localhost:${Number(process.env.PORT || 3000)}`;
+    const baseUrl = resolveOAuthBaseUrl(process.env, req?.headers);
     const redirectUri = `${baseUrl}/auth/callback`;
-    return { clientId, clientSecret, baseUrl, redirectUri, configured: Boolean(clientId && clientSecret) };
+    const isHttps = baseUrl.startsWith('https://');
+    return {
+      clientId,
+      clientSecret,
+      baseUrl,
+      redirectUri,
+      isHttps,
+      configured: Boolean(clientId && clientSecret),
+    };
   };
 
   const signSessionCookie = (payload: Record<string, unknown>): string => {
@@ -855,7 +864,7 @@ async function startServer() {
   };
 
   app.get('/api/auth/status', (req, res) => {
-    const { configured, redirectUri } = getOAuthConfig();
+    const { configured, redirectUri } = getOAuthConfig(req);
     const user = verifySessionCookie(req.headers.cookie);
     res.json({
       configured,
@@ -865,24 +874,20 @@ async function startServer() {
     });
   });
 
-  app.get('/api/auth/url', (_req, res) => {
-    const { clientId, configured, redirectUri } = getOAuthConfig();
+  app.get('/api/auth/url', (req, res) => {
+    const { clientId, configured, redirectUri } = getOAuthConfig(req);
     if (!configured) {
       res.status(503).json({
         error:
-          'Google OAuth credentials are not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in AI Studio Secrets.',
+          'Google OAuth credentials are not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment variables (Vercel / AI Studio Secrets).',
         missingCredentials: true,
         redirectUri,
       });
       return;
     }
 
-    const now = Date.now();
-    for (const [k, exp] of pendingOAuthStates.entries()) {
-      if (exp < now) pendingOAuthStates.delete(k);
-    }
-    const state = crypto.randomBytes(16).toString('hex');
-    pendingOAuthStates.set(state, now + 10 * 60 * 1000);
+    // Stateless HMAC-signed CSRF state token — safe across Vercel serverless cold starts
+    const state = createSignedOAuthState(SESSION_SECRET);
 
     const providerAuthUrl =
       process.env.OAUTH_PROVIDER_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -919,14 +924,12 @@ async function startServer() {
       return;
     }
 
-    const stateExpiry = pendingOAuthStates.get(state);
-    if (!code || !state || !stateExpiry || stateExpiry < Date.now()) {
+    if (!code || !state || !verifySignedOAuthState(state, SESSION_SECRET)) {
       res.status(400).send('Invalid or expired OAuth state/code.');
       return;
     }
-    pendingOAuthStates.delete(state);
 
-    const { clientId, clientSecret, redirectUri } = getOAuthConfig();
+    const { clientId, clientSecret, redirectUri, isHttps } = getOAuthConfig(req);
     if (!clientId || !clientSecret) {
       res.status(503).send('OAuth client credentials are not configured on the server.');
       return;
@@ -981,8 +984,8 @@ async function startServer() {
       const cookieValue = signSessionCookie(userPayload);
       res.cookie(SESSION_COOKIE_NAME, cookieValue, {
         httpOnly: true,
-        secure: true,
-        sameSite: 'none',
+        secure: isHttps,
+        sameSite: isHttps ? 'none' : 'lax',
         path: '/',
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
@@ -1018,13 +1021,14 @@ async function startServer() {
     }
   };
 
-  app.get(['/auth/callback', '/auth/callback/'], handleOAuthCallback);
+  app.get(['/auth/callback', '/auth/callback/', '/api/auth/callback', '/api/auth/callback/'], handleOAuthCallback);
 
-  app.post('/api/auth/logout', (_req, res) => {
+  app.post('/api/auth/logout', (req, res) => {
+    const { isHttps } = getOAuthConfig(req);
     res.clearCookie(SESSION_COOKIE_NAME, {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: isHttps,
+      sameSite: isHttps ? 'none' : 'lax',
       path: '/',
     });
     res.json({ ok: true });
@@ -2319,6 +2323,11 @@ Return ONLY valid JSON with:
     res.json({ task: toPublicTask(task) });
   });
 
+  return app;
+}
+
+async function startServer() {
+  const app = createApiApp();
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
@@ -2347,4 +2356,6 @@ Return ONLY valid JSON with:
   });
 }
 
-startServer();
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  startServer();
+}
