@@ -1,0 +1,6 @@
+{
+  "name": "Vayu Index",
+  "description": "Atmospheric obsidian winter smog telemetry, AI resilience coach, and low-exposure route planner PWA.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
