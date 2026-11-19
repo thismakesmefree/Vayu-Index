@@ -29,13 +29,13 @@ describe('stateless OAuth state and Vercel base URL resolution', () => {
     assert.equal(verifySignedOAuthState('malformed-token', secret, now), false);
   });
 
-  it('resolves base URL from APP_URL, Vercel headers, VERCEL_URL, or localhost', () => {
+  it('uses the active request origin before configured fallbacks for OAuth redirects', () => {
     assert.equal(
       resolveOAuthBaseUrl(
-        { APP_URL: 'https://vayu.vercel.app/' },
-        { 'x-forwarded-host': 'other.vercel.app', 'x-forwarded-proto': 'https' }
+        { APP_URL: 'https://old-domain.vercel.app/' },
+        { 'x-forwarded-host': 'current-domain.vercel.app', 'x-forwarded-proto': 'https' }
       ),
-      'https://vayu.vercel.app'
+      'https://current-domain.vercel.app'
     );
 
     assert.equal(
