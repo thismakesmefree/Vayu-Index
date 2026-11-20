@@ -382,6 +382,8 @@ export const MapView: React.FC<MapViewProps> = ({
 
   const [mapsApiKey, setMapsApiKey] = useState<string>('');
   const [mapsConfigLoaded, setMapsConfigLoaded] = useState(false);
+  const [mapsConfigError, setMapsConfigError] = useState<string | null>(null);
+  const [mapsApiLoadError, setMapsApiLoadError] = useState(false);
 
   const defaultDest = useMemo<LatLngPoint>(() => {
     const sector = city.sectors[2] ?? city.sectors[1];
@@ -453,13 +455,31 @@ export const MapView: React.FC<MapViewProps> = ({
   const mapMountedAtRef = useRef<number>(Date.now());
 
   useEffect(() => {
-    fetch('/api/maps/config')
-      .then((r) => r.json())
-      .then((data: { configured?: boolean; apiKey?: string }) => {
-        if (data.apiKey) setMapsApiKey(data.apiKey);
+    fetch('/api/maps/config', { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Maps configuration endpoint returned HTTP ${response.status}.`);
+        }
+
+        const data = (await response.json()) as { configured?: boolean; apiKey?: unknown };
+        if (typeof data.configured !== 'boolean') {
+          throw new Error('Maps configuration endpoint returned an invalid response.');
+        }
+        const apiKey = data.apiKey;
+        if (data.configured && (typeof apiKey !== 'string' || !apiKey.trim())) {
+          throw new Error('Maps configuration reports a key but did not return one.');
+        }
+
+        setMapsApiKey(data.configured && typeof apiKey === 'string' ? apiKey.trim() : '');
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        setMapsConfigError(error instanceof Error ? error.message : 'Maps configuration request failed.');
+      })
       .finally(() => setMapsConfigLoaded(true));
+  }, []);
+
+  const handleMapsApiLoadError = useCallback(() => {
+    setMapsApiLoadError(true);
   }, []);
 
   // Load 53-station Whole-India AQI & Meteorology Grid once on mount
@@ -989,18 +1009,32 @@ export const MapView: React.FC<MapViewProps> = ({
                     <Loader2 className="w-4 h-4 animate-spin text-[#38BDF8]" />
                     <span>Initializing Google Maps telemetry canvas...</span>
                   </div>
+                ) : mapsConfigError ? (
+                  <div className="flex h-full w-full flex-col items-center justify-center p-6 text-center space-y-2">
+                    <AlertTriangle className="w-7 h-7 text-amber-400" />
+                    <p className={`text-sm font-semibold ${tokens.textPrimary}`}>
+                      Unable to Load Google Maps Configuration
+                    </p>
+                    <p className={`max-w-md text-xs ${tokens.textMuted}`}>
+                      {mapsConfigError} Check <code className="font-mono-tabular">/api/health</code> for
+                      server configuration status and confirm the Vercel API function is deployed.
+                    </p>
+                  </div>
                 ) : !mapsApiKey ? (
                   <div className="flex h-full w-full flex-col items-center justify-center p-6 text-center space-y-2">
                     <AlertTriangle className="w-7 h-7 text-amber-400" />
                     <p className={`text-sm font-semibold ${tokens.textPrimary}`}>
-                      Google Maps API Key Unavailable
+                      Google Maps Browser Key Not Configured
                     </p>
                     <p className={`max-w-md text-xs ${tokens.textMuted}`}>
-                      Configure <code className="font-mono-tabular">GOOGLE_MAPS_API_KEY</code> to render interactive Google Map tiles.
+                      Set <code className="font-mono-tabular">GOOGLE_MAPS_BROWSER_API_KEY</code> in the active
+                      Vercel environment and redeploy. Confirm <code className="font-mono-tabular">hasMapsBrowserKey</code>{' '}
+                      is true at <code className="font-mono-tabular">/api/health</code>. Set{' '}
+                      <code className="font-mono-tabular">GOOGLE_MAPS_SERVER_API_KEY</code> for route and air-quality services.
                     </p>
                   </div>
                 ) : (
-                  <APIProvider apiKey={mapsApiKey}>
+                  <APIProvider apiKey={mapsApiKey} onError={handleMapsApiLoadError}>
                     <GoogleMap
                       mapId="DEMO_MAP_ID"
                       defaultCenter={mapCenter}
@@ -1130,6 +1164,19 @@ export const MapView: React.FC<MapViewProps> = ({
                         })}
                     </GoogleMap>
                   </APIProvider>
+                )}
+                {mapsApiLoadError && (
+                  <div
+                    role="alert"
+                    className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-slate-950/90 p-6 text-center"
+                  >
+                    <AlertTriangle className="w-7 h-7 text-amber-400" />
+                    <p className="text-sm font-semibold text-white">Google Maps JavaScript API Failed to Load</p>
+                    <p className="max-w-md text-xs text-slate-300">
+                      Check the browser console for Google’s error code. Verify Maps JavaScript API is enabled,
+                      billing is active, and the key’s website referrer and API restrictions allow this app.
+                    </p>
+                  </div>
                 )}
 
                 {/* Floating Route & Layer Legend HUD — kept clear of bottom Google attribution & logo */}

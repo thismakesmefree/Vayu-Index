@@ -27,6 +27,13 @@ import type { TransitMode } from './src/utils/airQuality.ts';
 import { PAN_INDIA_AQI_STATIONS } from './src/utils/indiaGrid.ts';
 import type { JourneyExplanationPoint, RouteStepSegment } from './src/types.ts';
 import {
+  GEMINI_FLASH_MODEL,
+  GEMINI_FLASH_LITE_MODEL,
+  getGoogleMapsBrowserApiKey,
+  getGoogleMapsServerApiKey,
+  resolveGeminiModel,
+} from './src/utils/integrationConfig.ts';
+import {
   createSignedOAuthState,
   resolveOAuthBaseUrl,
   verifySignedOAuthState,
@@ -47,9 +54,6 @@ interface ChatHistoryItem {
   role: 'user' | 'model';
   text: string;
 }
-
-const GEMINI_FLASH_MODEL = 'gemini-3.8-flash';
-const GEMINI_FLASH_LITE_MODEL = 'gemini-3.5-flash-lite';
 
 interface ChatRequestBody {
   message?: string;
@@ -183,9 +187,12 @@ export function createApiApp(): express.Express {
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
       hasServerGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+      hasMapsBrowserKey: Boolean(getGoogleMapsBrowserApiKey(process.env)),
+      hasMapsServerKey: Boolean(getGoogleMapsServerApiKey(process.env)),
     });
   });
 
@@ -1093,8 +1100,7 @@ export function createApiApp(): express.Express {
         },
       ];
 
-      const selectedModel =
-        body.model === GEMINI_FLASH_LITE_MODEL ? GEMINI_FLASH_LITE_MODEL : GEMINI_FLASH_MODEL;
+      const selectedModel = resolveGeminiModel(body.model);
 
       const response = await ai.models.generateContent({
         model: selectedModel,
@@ -1128,21 +1134,14 @@ export function createApiApp(): express.Express {
     }
   });
 
-  const getGoogleMapsApiKey = (): string =>
-    (
-      process.env.GOOGLE_MAPS_API_KEY ||
-      process.env.VITE_GOOGLE_MAPS_API_KEY ||
-      process.env.MAPS_API_KEY ||
-      ''
-    ).trim();
-
   const TRANSPARENT_1X1_PNG = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
     'base64'
   );
 
   app.get('/api/maps/config', (_req, res) => {
-    const apiKey = getGoogleMapsApiKey();
+    const apiKey = getGoogleMapsBrowserApiKey(process.env);
+    res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       configured: Boolean(apiKey),
       apiKey,
@@ -1176,7 +1175,7 @@ export function createApiApp(): express.Express {
       return;
     }
 
-    const mapsKey = getGoogleMapsApiKey();
+    const mapsKey = getGoogleMapsServerApiKey(process.env);
     if (!mapsKey) {
       res.setHeader('Content-Type', 'image/png');
       res.send(TRANSPARENT_1X1_PNG);
@@ -1638,7 +1637,7 @@ export function createApiApp(): express.Express {
     routingSource: 'google_routes' | 'osrm_roads' | 'corridor_fallback';
   }> => {
     const { origin, destination, transitMode, windDirDeg } = params;
-    const mapsKey = getGoogleMapsApiKey();
+    const mapsKey = getGoogleMapsServerApiKey(process.env);
     const googleTravelMode = mapTransitModeToGoogleTravelMode(transitMode);
     const rawCandidates: RawRoadCandidate[] = [];
     let routingSource: 'google_routes' | 'osrm_roads' | 'corridor_fallback' = 'corridor_fallback';
@@ -2358,6 +2357,10 @@ async function startServer() {
   });
 }
 
-if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
-  startServer();
+const isEntrypoint =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isEntrypoint) {
+  void startServer();
 }
