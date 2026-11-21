@@ -9,9 +9,17 @@ export function resolveGeminiModel(model: unknown): GeminiModel {
 }
 
 export function getGoogleMapsBrowserApiKey(env: IntegrationEnvironment): string {
-  return (env.GOOGLE_MAPS_BROWSER_API_KEY || env.GOOGLE_MAPS_API_KEY || '').trim();
+  return (
+    env.GOOGLE_MAPS_BROWSER_API_KEY?.trim() ||
+    env.GOOGLE_MAPS_API_KEY?.trim() ||
+    ''
+  );
 }
 
 export function getGoogleMapsServerApiKey(env: IntegrationEnvironment): string {
-  return (env.GOOGLE_MAPS_SERVER_API_KEY || env.GOOGLE_MAPS_API_KEY || '').trim();
+  return (
+    env.GOOGLE_MAPS_SERVER_API_KEY?.trim() ||
+    env.GOOGLE_MAPS_API_KEY?.trim() ||
+    ''
+  );
 }

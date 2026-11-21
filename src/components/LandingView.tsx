@@ -10,9 +10,8 @@ import {
   Sparkles,
   Wind,
 } from 'lucide-react';
-import { AuthMode, ResolvedTheme, ThemeMode, UserLocationState } from '../types';
+import { ResolvedTheme, ThemeMode, UserLocationState } from '../types';
 import { getAqiBand, LocationTelemetry } from '../utils/airQuality';
-import { QuotaStatus } from '../utils/quota';
 import { getThemeTokens } from '../utils/theme';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ScrollRevealCard } from './ScrollRevealCard';
@@ -25,12 +24,10 @@ interface LandingViewProps {
   telemetryLoading: boolean;
   locationState: UserLocationState;
   onOpenLocationGate: () => void;
-  quotaStatus: QuotaStatus;
   customApiKey: string;
-  authMode: AuthMode;
   onEnterFreeTier: () => void;
   onEnterWithCustomKey: (key: string) => void;
-  onOpenOAuth: () => void;
+  onOpenApiKeySetup: () => void;
 }
 
 export const LandingView: React.FC<LandingViewProps> = ({
@@ -41,14 +38,13 @@ export const LandingView: React.FC<LandingViewProps> = ({
   telemetryLoading,
   locationState,
   onOpenLocationGate,
-  quotaStatus,
   customApiKey,
   onEnterFreeTier,
   onEnterWithCustomKey,
-  onOpenOAuth,
+  onOpenApiKeySetup,
 }) => {
-  const [guestSubMode, setGuestSubMode] = useState<'free' | 'key'>(
-    customApiKey ? 'key' : 'free'
+  const [guestSubMode, setGuestSubMode] = useState<'explore' | 'key'>(
+    customApiKey ? 'key' : 'explore'
   );
   const [keyInput, setKeyInput] = useState(customApiKey);
   const [keyError, setKeyError] = useState<string | null>(null);
@@ -72,7 +68,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
 
   return (
     <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1320px] flex-col px-4 py-6 sm:px-8">
-      {/* Clean Top Bar: Brand + Location + Theme + Install + OAuth */}
+      {/* Clean Top Bar: Brand + Location + Theme + Install */}
       <header className={`flex flex-wrap items-center justify-between gap-3 border-b pb-5 ${tokens.divider}`}>
         <div className="flex items-center gap-3">
           <span className={`font-display text-lg font-bold tracking-tight whitespace-nowrap shrink-0 ${tokens.textPrimary}`}>
@@ -102,10 +98,10 @@ export const LandingView: React.FC<LandingViewProps> = ({
           <PWAInstallButton variant="compact" />
           <button
             type="button"
-            onClick={onOpenOAuth}
+            onClick={onOpenApiKeySetup}
             className={`rounded-lg border px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${tokens.btnSecondary}`}
           >
-            Sign in with OAuth
+            Gemini API key setup
           </button>
         </div>
       </header>
@@ -250,20 +246,16 @@ export const LandingView: React.FC<LandingViewProps> = ({
           </div>
           </ScrollRevealCard>
 
-          {/* Option B: OAuth Login Mode */}
+          {/* Personal Gemini API key setup */}
           <ScrollRevealCard immediate delay={0.08}>
           <div className={`vayu-glass-panel rounded-2xl border p-6 transition-colors ${tokens.surface}`}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className={`font-display text-lg font-semibold ${tokens.textPrimary}`}>
-                  Login Mode (OAuth)
+                  Use your own Gemini API key
                 </h2>
                 <p className={`mt-1 text-sm ${tokens.textSecondary}`}>
-                  Automatically attaches your linked Gemini API key session and unlocks{' '}
-                  <span className={`font-medium ${tokens.textPrimary}`}>
-                    Low-Smog Route Planning
-                  </span>{' '}
-                  in Map View.
+                  AI chat and Gemini route optimization use a key you provide. It is stored only in this browser.
                 </p>
               </div>
               <ShieldCheck className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
@@ -271,15 +263,15 @@ export const LandingView: React.FC<LandingViewProps> = ({
 
             <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t ${tokens.divider}`}>
               <span className={`text-xs ${tokens.textMuted}`}>
-                Unrestricted AI queries · Route planner unlocked
+                Get a key from the official Google AI Studio page
               </span>
               <button
                 type="button"
-                onClick={onOpenOAuth}
-                data-testid="landing-oauth-btn"
+                onClick={onOpenApiKeySetup}
+                data-testid="landing-api-key-help-btn"
                 className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-[#38BDF8] to-[#8B5CF6] px-4 py-2.5 text-sm font-semibold text-[#060609] shadow-[0_0_24px_-4px_rgba(56,189,248,0.4)] hover:brightness-110 transition-all whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <span>Sign in with OAuth</span>
+                <span>Get an API key</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -296,21 +288,21 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 </h2>
                 <p className={`mt-0.5 text-xs flex items-center gap-1.5 ${tokens.textMuted}`}>
                   <Lock className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Low-Smog Route Planner in Map View stays locked until OAuth sign-in</span>
+                  <span>AI chat and Gemini route optimization require your own API key</span>
                 </p>
               </div>
 
               <div className={`flex items-center gap-1 rounded-lg border p-1 ${tokens.surfaceSubtle}`}>
                 <button
                   type="button"
-                  onClick={() => setGuestSubMode('free')}
+                  onClick={() => setGuestSubMode('explore')}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    guestSubMode === 'free'
+                    guestSubMode === 'explore'
                       ? 'bg-[#38BDF8] text-[#060609] font-semibold'
                       : `${tokens.textMuted}`
                   }`}
                 >
-                  Free Tier
+                  Explore
                 </button>
                 <button
                   type="button"
@@ -326,30 +318,19 @@ export const LandingView: React.FC<LandingViewProps> = ({
               </div>
             </div>
 
-            {guestSubMode === 'free' ? (
+            {guestSubMode === 'explore' ? (
               <div className="mt-5 space-y-4">
-                <div className={`flex items-center justify-between rounded-xl border px-4 py-3 ${tokens.surfaceSubtle}`}>
-                  <div>
-                    <p className={`text-sm font-medium ${tokens.textPrimary}`}>Daily AI Quota</p>
-                    <p className={`text-xs ${tokens.textMuted}`}>
-                      Resets automatically every 24 hours
-                    </p>
-                  </div>
-                  <span
-                    data-testid="landing-quota-badge"
-                    className={`font-mono-tabular text-sm font-semibold ${tokens.accentText}`}
-                  >
-                    {quotaStatus.remaining} / {quotaStatus.limit} prompts left
-                  </span>
-                </div>
+                <p className={`text-xs ${tokens.textMuted}`}>
+                  Explore the dashboard and live map. Add a personal key to use Gemini features.
+                </p>
 
                 <button
                   type="button"
                   onClick={onEnterFreeTier}
-                  data-testid="landing-guest-free-btn"
+                  data-testid="landing-explore-dashboard-btn"
                   className={`flex h-11 w-full items-center justify-center gap-2 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${tokens.btnSecondary}`}
                 >
-                  <span>Continue as Guest (Free Tier)</span>
+                  <span>Explore the Dashboard</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -369,7 +350,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
                         setKeyInput(e.target.value);
                         if (keyError) setKeyError(null);
                       }}
-                      placeholder="AIzaSy..."
+                      placeholder="Paste your API key"
                       className={`h-11 w-full rounded-lg border pl-9 pr-3 text-sm focus:border-[#38BDF8] focus:outline-none ${tokens.input}`}
                     />
                   </div>

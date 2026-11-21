@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Leaf, RotateCcw, Send, Shield, Sparkles, Wind } from 'lucide-react';
-import { AuthMode, ChatMessage, ResolvedTheme } from '../types';
+import { Leaf, RotateCcw, Send, Shield, Sparkles, Wind } from 'lucide-react';
+import { ChatMessage, ResolvedTheme } from '../types';
 import { CityTelemetry } from '../utils/airQuality';
-import { QuotaStatus } from '../utils/quota';
 import { getThemeTokens } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 import { ScrollRevealCard } from './ScrollRevealCard';
@@ -11,12 +10,7 @@ import { ScrollRevealCard } from './ScrollRevealCard';
 interface AIChatViewProps {
   resolvedTheme: ResolvedTheme;
   city: CityTelemetry;
-  authMode: AuthMode;
   customApiKey: string;
-  quotaStatus: QuotaStatus;
-  onConsumeQuota: () => boolean;
-  onOpenOAuth: () => void;
-  onGoToSettings: () => void;
   initialPrompt?: string | null;
   onClearInitialPrompt?: () => void;
 }
@@ -51,12 +45,7 @@ const QUICK_SPLIT_CHIPS = [
 export const AIChatView: React.FC<AIChatViewProps> = ({
   resolvedTheme,
   city,
-  authMode,
   customApiKey,
-  quotaStatus,
-  onConsumeQuota,
-  onOpenOAuth,
-  onGoToSettings,
   initialPrompt,
   onClearInitialPrompt,
 }) => {
@@ -64,7 +53,6 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
   const [inputValue, setInputValue] = useState('');
   const [promptsDismissed, setPromptsDismissed] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [quotaError, setQuotaError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<'gemini-3.8-flash' | 'gemini-3.5-flash-lite'>(
     'gemini-3.8-flash'
   );
@@ -72,7 +60,6 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
   const consumedInitialPromptRef = useRef<string | null>(null);
 
   const tokens = getThemeTokens(resolvedTheme);
-  const isFreeTier = authMode === 'guest-free';
   const showStarterPrompts = !promptsDismissed && inputValue.length === 0;
 
   useEffect(() => {
@@ -93,15 +80,6 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
 
     triggerHaptic('light');
     setPromptsDismissed(true);
-    setQuotaError(null);
-
-    if (isFreeTier && quotaStatus.isExhausted) {
-      setQuotaError(
-        'Daily Free Tier limit (10/10 prompts) reached. Enter your personal Gemini API key or sign in with OAuth to continue.'
-      );
-      return;
-    }
-
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -126,8 +104,7 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
           pm25: city.pollutants[0]?.value ?? 0,
           temperatureC: city.temperatureC,
           windKmh: city.windKmh,
-          userApiKey: authMode === 'guest-key' ? customApiKey : undefined,
-          authMode,
+          userApiKey: customApiKey,
           model: selectedModel,
         }),
       });
@@ -135,10 +112,6 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
       const data = await response.json();
       if (!response.ok || !data.text) {
         throw new Error(data.error || 'Failed to reach Vayu AI model.');
-      }
-
-      if (isFreeTier) {
-        onConsumeQuota();
       }
 
       const aiMsg: ChatMessage = {
@@ -182,7 +155,6 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
     setMessages([]);
     setInputValue('');
     setPromptsDismissed(false);
-    setQuotaError(null);
     inputRef.current?.focus();
   };
 
@@ -237,25 +209,12 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
               3.5 Flash Lite
             </button>
           </div>
-          {isFreeTier ? (
-            <span
-              data-testid="ai-quota-badge"
-              className={`rounded-full border px-3 py-1 font-mono-tabular text-xs font-semibold ${
-                quotaStatus.isExhausted
-                  ? 'border-red-400/40 bg-red-500/15 text-red-400'
-                  : 'border-[#38BDF8]/35 bg-[#38BDF8]/10 text-[#38BDF8]'
-              }`}
-            >
-              {quotaStatus.remaining} / {quotaStatus.limit} free prompts left
-            </span>
-          ) : (
             <span
               data-testid="ai-quota-badge"
               className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-500"
             >
-              {authMode === 'oauth' ? 'OAuth Session · Unrestricted' : 'Custom Key · Unrestricted'}
+            Personal Gemini key · Unrestricted
             </span>
-          )}
 
           <button
             type="button"
@@ -319,34 +278,6 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
         )}
       </div>
       </ScrollRevealCard>
-
-      {quotaError && (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/35 bg-amber-500/15 px-4 py-3 text-xs text-amber-400"
-        >
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{quotaError}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onGoToSettings}
-              className={`rounded-lg border px-3 py-1.5 font-medium cursor-pointer ${tokens.btnSecondary}`}
-            >
-              Add API Key
-            </button>
-            <button
-              type="button"
-              onClick={onOpenOAuth}
-              className="rounded-lg bg-[#38BDF8] px-3 py-1.5 font-semibold text-[#060609] hover:bg-[#7BD0FF] cursor-pointer"
-            >
-              OAuth Sign-In
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Chat Composer Container with Embedded Dismissible Starter Prompts */}
       <ScrollRevealCard delay={0.04}>

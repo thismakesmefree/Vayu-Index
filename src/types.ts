@@ -8,8 +8,6 @@ export type ResolvedTheme = 'light' | 'dark' | 'oled';
 
 export type DockOrientation = 'vertical' | 'horizontal';
 
-export type AuthMode = 'guest-free' | 'guest-key' | 'oauth';
-
 export type LocationPermissionStatus = 'pending' | 'granted' | 'denied' | 'manual';
 
 export interface UserLocationState {
@@ -33,14 +31,6 @@ export interface LocationSearchResult {
   timezone?: string;
   elevation?: number;
   displayLabel: string;
-}
-
-export interface OAuthUser {
-  name: string;
-  email: string;
-  picture?: string;
-  avatarInitials: string;
-  provider: string;
 }
 
 export interface ChatMessage {

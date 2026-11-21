@@ -32,3 +32,18 @@ test('Maps key resolution requires the documented variables and ignores unsuppor
   assert.equal(getGoogleMapsBrowserApiKey({ GOOGLE_MAPS_BROWSER_API_KEY: '  ' }), '');
   assert.equal(getGoogleMapsServerApiKey({ GOOGLE_MAPS_SERVER_API_KEY: '  ' }), '');
 });
+
+test('Maps key resolution falls back to the legacy key when a dedicated key is blank', () => {
+  const env = {
+    GOOGLE_MAPS_BROWSER_API_KEY: '  ',
+    GOOGLE_MAPS_SERVER_API_KEY: '',
+    GOOGLE_MAPS_API_KEY: ' legacy-key ',
+  };
+  assert.equal(getGoogleMapsBrowserApiKey(env), 'legacy-key');
+  assert.equal(getGoogleMapsServerApiKey(env), 'legacy-key');
+
+  assert.equal(
+    getGoogleMapsBrowserApiKey({ ...env, GOOGLE_MAPS_BROWSER_API_KEY: ' browser-key ' }),
+    'browser-key'
+  );
+});

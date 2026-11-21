@@ -33,7 +33,6 @@ import {
   Wind,
 } from 'lucide-react';
 import {
-  AuthMode,
   BackgroundRouteTask,
   GeminiOptimizedRoutePayload,
   JourneyExplanationPayload,
@@ -65,9 +64,8 @@ import { ScrollRevealCard } from './ScrollRevealCard';
 interface MapViewProps {
   resolvedTheme: ResolvedTheme;
   city: CityTelemetry;
-  authMode: AuthMode;
   customApiKey: string;
-  onOpenOAuth: () => void;
+  onRequireApiKey: () => void;
   backgroundTasks: BackgroundRouteTask[];
   activeTaskResult: BackgroundRouteTask | null;
   onClearActiveTaskResult: () => void;
@@ -368,9 +366,8 @@ const MapOverlayController: React.FC<{
 export const MapView: React.FC<MapViewProps> = ({
   resolvedTheme,
   city,
-  authMode,
   customApiKey,
-  onOpenOAuth,
+  onRequireApiKey,
   backgroundTasks,
   activeTaskResult,
   onClearActiveTaskResult,
@@ -378,7 +375,7 @@ export const MapView: React.FC<MapViewProps> = ({
   onMapInteractionActivity,
 }) => {
   const tokens = getThemeTokens(resolvedTheme);
-  const isOAuthUnlocked = authMode === 'oauth';
+  const hasGeminiApiKey = Boolean(customApiKey.trim());
   const useVectorRendering = useMemo(() => detectHardwareWebGL2(), []);
 
   const [mapsApiKey, setMapsApiKey] = useState<string>('');
@@ -666,9 +663,9 @@ export const MapView: React.FC<MapViewProps> = ({
   };
 
   const handleOptimizeSyncRoute = async () => {
-    if (!isOAuthUnlocked) {
+    if (!hasGeminiApiKey) {
       triggerHaptic('warning');
-      onOpenOAuth();
+      onRequireApiKey();
       return;
     }
 
@@ -756,9 +753,9 @@ export const MapView: React.FC<MapViewProps> = ({
   };
 
   const handleLaunchBackgroundTask = async () => {
-    if (!isOAuthUnlocked) {
+    if (!hasGeminiApiKey) {
       triggerHaptic('warning');
-      onOpenOAuth();
+      onRequireApiKey();
       return;
     }
 
@@ -780,7 +777,7 @@ export const MapView: React.FC<MapViewProps> = ({
       triggerHaptic('success');
     } else {
       triggerHaptic('warning');
-      setRouteError('Unable to queue background Gemini task. Ensure you are signed in.');
+      setRouteError('Unable to queue the Gemini route task. Check your key and try again.');
     }
   };
 
@@ -830,7 +827,7 @@ export const MapView: React.FC<MapViewProps> = ({
           </div>
 
           <span className="inline-flex items-center gap-2 text-xs">
-            {isOAuthUnlocked ? (
+            {hasGeminiApiKey ? (
               <span className="inline-flex items-center gap-1.5 text-emerald-500 font-semibold">
                 <ShieldCheck className="w-4 h-4" />
                 Gemini Map Routing Unlocked
@@ -838,7 +835,7 @@ export const MapView: React.FC<MapViewProps> = ({
             ) : (
               <span className="inline-flex items-center gap-1.5 text-amber-500 font-semibold">
                 <Lock className="w-3.5 h-3.5" />
-                Direct Maps Active · OAuth Unlocks Gemini Optimizer
+                Direct Maps Active · Add your key to enable Gemini optimization
               </span>
             )}
           </span>
@@ -1685,8 +1682,8 @@ export const MapView: React.FC<MapViewProps> = ({
                 </div>
               )}
 
-              {/* OAuth Gate for Full Gemini Synthesis & >100 km Background Tasks */}
-              {!isOAuthUnlocked ? (
+              {/* Gemini optimization requires the user's personal API key. */}
+              {!hasGeminiApiKey ? (
                 <div
                   data-testid="route-planner-lock-banner"
                   className={`rounded-xl border border-amber-500/35 p-4 text-center space-y-3 ${tokens.surfaceSubtle}`}
@@ -1696,22 +1693,22 @@ export const MapView: React.FC<MapViewProps> = ({
                   </div>
                   <div className="space-y-1">
                     <h3 className={`font-display text-sm font-semibold ${tokens.textPrimary}`}>
-                      Sign in for Gemini Deep Optimization
+                      Add a key for Gemini Deep Optimization
                     </h3>
                     <p className={`text-xs leading-relaxed ${tokens.textSecondary}`}>
-                      Direct Google Maps routes &amp; Explain Journey work immediately. Sign in with OAuth to run Gemini low-smog optimization or &gt;100 km background tasks.
+                      Google Maps routes work independently. Add your Gemini API key to run AI route optimization and long-distance background tasks.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => {
                       triggerHaptic('medium');
-                      onOpenOAuth();
+                      onRequireApiKey();
                     }}
-                    data-testid="map-unlock-oauth-btn"
+                    data-testid="map-add-api-key-btn"
                     className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[#38BDF8] to-[#8B5CF6] text-xs font-semibold text-[#060609] shadow-[0_0_24px_-4px_rgba(56,189,248,0.45)] hover:brightness-110 transition-all cursor-pointer"
                   >
-                    <span>Sign in with OAuth to Unlock</span>
+                    <span>Set up Gemini API key</span>
                   </button>
                 </div>
               ) : (
