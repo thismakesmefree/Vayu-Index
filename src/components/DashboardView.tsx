@@ -319,10 +319,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </span>
           </div>
           <div className={`mt-1 flex flex-wrap items-center gap-2 text-xs ${tokens.textMuted}`}>
-            <span className="font-mono-tabular">
-              {telemetry.coords.lat.toFixed(3)}°, {telemetry.coords.lon.toFixed(3)}° · Elev {telemetry.elevationM} m
-            </span>
-            <span aria-hidden="true">·</span>
             <span>{telemetry.timezone}</span>
             <span aria-hidden="true">·</span>
             <span>{telemetry.updatedAtLabel}</span>

@@ -30,7 +30,13 @@ import {
   resolveThemeMode,
   THEME_STORAGE_KEY,
 } from './utils/theme';
-import { fetchLocationTelemetry, LOCATION_STORAGE_KEY } from './utils/location';
+import {
+  fetchLocationTelemetry,
+  getReadableLocationLabel,
+  isCoordinateLocationLabel,
+  LOCATION_STORAGE_KEY,
+  reverseGeocodeCoords,
+} from './utils/location';
 import { triggerHaptic } from './utils/haptics';
 import { sendRouteReadyNotification } from './utils/notifications';
 import { MAPS_AUTH_FAILURE_EVENT, MAPS_QUOTA_EXCEEDED_EVENT } from './utils/mapsErrors';
@@ -169,6 +175,41 @@ export default function App() {
   const locationConfirmed =
     (locationState.status === 'granted' || locationState.status === 'manual') &&
     Boolean(locationState.coords);
+  const [locationNameResolved, setLocationNameResolved] = useState(
+    () => !locationState.coords || !isCoordinateLocationLabel(locationState.label)
+  );
+
+  useEffect(() => {
+    const coords = locationState.coords;
+    if (!coords || !isCoordinateLocationLabel(locationState.label)) {
+      setLocationNameResolved(true);
+      return;
+    }
+
+    let active = true;
+    setLocationNameResolved(false);
+    void reverseGeocodeCoords(coords.lat, coords.lon).then((resolved) => {
+      if (!active) return;
+      const readableLocation = {
+        ...locationState,
+        label: resolved.label,
+        region: resolved.region,
+        country: resolved.country || locationState.country,
+      };
+      storage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(readableLocation));
+      setLocationState(readableLocation);
+      setLocationNameResolved(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    locationState.label,
+    locationState.coords?.lat,
+    locationState.coords?.lon,
+    locationState.country,
+    storage,
+  ]);
 
   const [locationModalOpen, setLocationModalOpen] = useState<boolean>(() => !locationConfirmed);
 
@@ -328,11 +369,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (locationConfirmed && locationState.coords) {
+    if (locationConfirmed && locationNameResolved && locationState.coords) {
       loadTelemetry(locationState);
     }
   }, [
     locationConfirmed,
+    locationNameResolved,
     locationState.coords?.lat,
     locationState.coords?.lon,
     locationState.label,
@@ -703,7 +745,7 @@ export default function App() {
                 >
                   <MapPin className="w-3 h-3 text-[#38BDF8] shrink-0" />
                   <span className="truncate">
-                    {locationConfirmed ? locationState.label : 'Set Location'}
+                    {locationConfirmed ? getReadableLocationLabel(locationState.label) : 'Set Location'}
                   </span>
                 </button>
               </div>

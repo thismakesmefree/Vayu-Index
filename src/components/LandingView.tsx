@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { ResolvedTheme, ThemeMode, UserLocationState } from '../types';
 import { getAqiBand, LocationTelemetry } from '../utils/airQuality';
+import { getReadableLocationLabel } from '../utils/location';
 import { getThemeTokens } from '../utils/theme';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ScrollRevealCard } from './ScrollRevealCard';
@@ -81,7 +82,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
           >
             <MapPin className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
             <span className="truncate">
-              {locationConfirmed ? locationState.label : 'Set Your Location'}
+              {locationConfirmed ? getReadableLocationLabel(locationState.label) : 'Set Your Location'}
             </span>
           </button>
         </div>
@@ -168,7 +169,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 <Loader2 className="w-5 h-5 animate-spin text-[#38BDF8] shrink-0" />
                 <div>
                   <p className={`font-semibold ${tokens.textPrimary}`}>
-                    Syncing live telemetry for {locationState.label}...
+                    Syncing live telemetry for {getReadableLocationLabel(locationState.label)}...
                   </p>
                   <p className={`text-xs ${tokens.textMuted}`}>
                     Querying Open-Meteo Air Quality, Meteorology &amp; GDACS cyclone tracks
@@ -225,12 +226,12 @@ export const LandingView: React.FC<LandingViewProps> = ({
               <div className="min-w-0">
                 <p className={`text-xs font-semibold ${tokens.textPrimary}`}>
                   {locationConfirmed
-                    ? `Location: ${locationState.label}`
+                    ? `Location: ${getReadableLocationLabel(locationState.label)}`
                     : 'Location Access Required'}
                 </p>
                 <p className={`text-[11px] truncate ${tokens.textMuted}`}>
                   {locationConfirmed && locationState.coords
-                    ? `${locationState.region} (${locationState.coords.lat.toFixed(2)}°, ${locationState.coords.lon.toFixed(2)}°)`
+                    ? locationState.region
                     : 'Allow GPS or search your location manually to continue'}
                 </p>
               </div>
