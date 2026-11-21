@@ -12,3 +12,8 @@ export function getGeminiErrorHttpStatus(error: unknown): number {
   if (message.includes('RESOURCE_EXHAUSTED') || /\b429\b/.test(message)) return 429;
   return 500;
 }
+
+export function redactUserApiKey(message: string, userApiKey: string | undefined): string {
+  const key = userApiKey?.trim();
+  return key ? message.split(key).join('[redacted]') : message;
+}

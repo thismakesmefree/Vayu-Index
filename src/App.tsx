@@ -9,28 +9,19 @@ import { AIChatView } from './components/AIChatView';
 import { MapView } from './components/MapView';
 import { StatisticsView } from './components/StatisticsView';
 import { SettingsView } from './components/SettingsView';
-import { OAuthModal } from './components/OAuthModal';
+import { GeminiApiKeySetupModal } from './components/GeminiApiKeySetupModal';
 import { LocationGateModal } from './components/LocationGateModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
 import {
   AppRoute,
-  AuthMode,
   BackgroundRouteTask,
   DefaultDarkVariant,
   DockOrientation,
-  OAuthUser,
   ThemeMode,
   UserLocationState,
 } from './types';
 import { getAqiBand, LocationTelemetry, TransitMode } from './utils/airQuality';
-import {
-  AUTH_SESSION_STORAGE_KEY,
-  CUSTOM_KEY_STORAGE_KEY,
-  DOCK_ORIENTATION_KEY,
-  consumeFreeTierPrompt,
-  getBrowserStorage,
-  readDailyQuota,
-} from './utils/quota';
+import { CUSTOM_KEY_STORAGE_KEY, DOCK_ORIENTATION_KEY, getBrowserStorage } from './utils/quota';
 import {
   DEFAULT_DARK_VARIANT_KEY,
   getInitialDockOrientation,
@@ -186,21 +177,15 @@ export default function App() {
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
 
   const [pendingActionAfterLocation, setPendingActionAfterLocation] = useState<
-    null | 'free-tier' | 'oauth' | { type: 'custom-key'; key: string }
+    null | 'free-tier' | { type: 'custom-key'; key: string }
   >(null);
 
   const [customApiKey, setCustomApiKey] = useState<string>(() => {
     return storage.getItem(CUSTOM_KEY_STORAGE_KEY) || '';
   });
 
-  const [oauthUser, setOAuthUser] = useState<OAuthUser | null>(null);
-
-  const [authMode, setAuthMode] = useState<AuthMode>(() =>
-    storage.getItem(CUSTOM_KEY_STORAGE_KEY) ? 'guest-key' : 'guest-free'
-  );
-
-  const [quotaStatus, setQuotaStatus] = useState(() => readDailyQuota(storage));
-  const [oauthModalOpen, setOAuthModalOpen] = useState(false);
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [routeAfterApiKey, setRouteAfterApiKey] = useState<AppRoute | null>(null);
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
   const [gmpAuthFailure, setGmpAuthFailure] = useState(false);
@@ -250,76 +235,50 @@ export default function App() {
     };
   }, [backgroundTasks]);
 
-  useEffect(() => {
-    storage.removeItem(AUTH_SESSION_STORAGE_KEY);
-    fetch('/api/auth/status')
-      .then((r) => r.json())
-      .then((data: { authenticated?: boolean; user?: OAuthUser | null }) => {
-        if (data.authenticated && data.user) {
-          setOAuthUser(data.user);
-          setAuthMode('oauth');
-        }
-      })
-      .catch(() => {
-        // stay in guest mode if auth status unreachable
-      });
-  }, [storage]);
-
-  // Sync existing background tasks when OAuth user signs in
-  useEffect(() => {
-    if (authMode !== 'oauth') {
-      setBackgroundTasks([]);
-      return;
-    }
-    fetch('/api/routes/background-tasks')
-      .then((r) => r.json())
-      .then((data: { tasks?: BackgroundRouteTask[] }) => {
-        if (Array.isArray(data.tasks)) {
-          data.tasks.forEach((t) => {
-            if (t.status === 'completed') notifiedTaskIdsRef.current.add(t.id);
-          });
-          setBackgroundTasks(data.tasks);
-        }
-      })
-      .catch(() => {
-        // ignore background task fetch failure
-      });
-  }, [authMode]);
-
-  // Poll active >100 km background Gemini tasks and send Browser/SW notification on completion
+  // Poll only tasks created in this browser session; task IDs act as unguessable access tokens.
   const hasRunningBackgroundTasks = backgroundTasks.some(
     (t) => t.status === 'pending' || t.status === 'running'
   );
 
   useEffect(() => {
-    if (!hasRunningBackgroundTasks || authMode !== 'oauth') return;
+    if (!hasRunningBackgroundTasks) return;
     const timer = window.setInterval(async () => {
-      try {
-        const res = await fetch('/api/routes/background-tasks');
-        if (!res.ok) return;
-        const data = (await res.json()) as { tasks?: BackgroundRouteTask[] };
-        if (!Array.isArray(data.tasks)) return;
-        setBackgroundTasks(data.tasks);
+      const updates = await Promise.all(
+        backgroundTasks
+          .filter((task) => task.status === 'pending' || task.status === 'running')
+          .map(async (task) => {
+            try {
+              const response = await fetch(`/api/routes/background-tasks/${encodeURIComponent(task.id)}`);
+              if (!response.ok) return null;
+              const data = (await response.json()) as { task?: BackgroundRouteTask };
+              return data.task ?? null;
+            } catch {
+              return null;
+            }
+          })
+      );
+      const changedTasks = updates.filter((task): task is BackgroundRouteTask => Boolean(task));
+      if (changedTasks.length === 0) return;
+      setBackgroundTasks((previous) =>
+        previous.map((task) => changedTasks.find((update) => update.id === task.id) ?? task)
+      );
 
-        for (const task of data.tasks) {
-          if (task.status === 'completed' && !notifiedTaskIdsRef.current.has(task.id)) {
-            notifiedTaskIdsRef.current.add(task.id);
-            triggerHaptic('success');
-            setRouteReadyToast(task);
-            const title = `Vayu Route Ready (${task.distanceKm} km)`;
-            const body = task.result?.summaryText
-              ? `${task.originLabel} → ${task.destinationLabel}: ${task.result.summaryText}`
-              : `Optimized low-pollution corridor from ${task.originLabel} to ${task.destinationLabel} is ready.`;
-            void sendRouteReadyNotification(title, body, { taskId: task.id });
-          }
+      for (const task of changedTasks) {
+        if (task.status === 'completed' && !notifiedTaskIdsRef.current.has(task.id)) {
+          notifiedTaskIdsRef.current.add(task.id);
+          triggerHaptic('success');
+          setRouteReadyToast(task);
+          const title = `Vayu Route Ready (${task.distanceKm} km)`;
+          const body = task.result?.summaryText
+            ? `${task.originLabel} → ${task.destinationLabel}: ${task.result.summaryText}`
+            : `Optimized low-pollution corridor from ${task.originLabel} to ${task.destinationLabel} is ready.`;
+          void sendRouteReadyNotification(title, body, { taskId: task.id });
         }
-      } catch {
-        // retry on next tick
       }
     }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [hasRunningBackgroundTasks, authMode]);
+  }, [hasRunningBackgroundTasks, backgroundTasks]);
 
   const handleEnqueueBackgroundTask = useCallback(
     async (params: {
@@ -406,13 +365,6 @@ export default function App() {
     [storage]
   );
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setQuotaStatus(readDailyQuota(storage));
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [storage]);
-
   const handleConfirmLocation = (nextState: UserLocationState) => {
     storage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(nextState));
     setLocationState(nextState);
@@ -421,12 +373,7 @@ export default function App() {
 
     if (pendingActionAfterLocation === 'free-tier') {
       setPendingActionAfterLocation(null);
-      setAuthMode(customApiKey ? 'guest-key' : 'guest-free');
-      setQuotaStatus(readDailyQuota(storage));
       setRoute('dashboard');
-    } else if (pendingActionAfterLocation === 'oauth') {
-      setPendingActionAfterLocation(null);
-      setOAuthModalOpen(true);
     } else if (
       pendingActionAfterLocation &&
       typeof pendingActionAfterLocation === 'object' &&
@@ -445,17 +392,12 @@ export default function App() {
       setLocationModalOpen(true);
       return;
     }
-    setAuthMode(customApiKey ? 'guest-key' : 'guest-free');
-    setQuotaStatus(readDailyQuota(storage));
     setRoute('dashboard');
   };
 
   const handleSaveCustomKey = (key: string) => {
     storage.setItem(CUSTOM_KEY_STORAGE_KEY, key);
     setCustomApiKey(key);
-    if (!oauthUser) {
-      setAuthMode('guest-key');
-    }
   };
 
   const handleEnterWithCustomKey = (key: string) => {
@@ -468,50 +410,39 @@ export default function App() {
     setRoute('dashboard');
   };
 
-  const handleRequestOAuth = () => {
-    if (!locationConfirmed) {
-      setPendingActionAfterLocation('oauth');
-      setLocationModalOpen(true);
-      return;
-    }
-    setOAuthModalOpen(true);
-  };
-
   const handleClearCustomKey = () => {
     storage.removeItem(CUSTOM_KEY_STORAGE_KEY);
     setCustomApiKey('');
-    if (!oauthUser) {
-      setAuthMode('guest-free');
-    }
   };
 
-  const handleOAuthSuccess = useCallback(
-    (user: OAuthUser) => {
-      setOAuthUser(user);
-      setAuthMode('oauth');
-      setOAuthModalOpen(false);
-      if (route === 'landing') {
-        setRoute('dashboard');
-      }
-    },
-    [route]
-  );
-
-  const handleSignOut = async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-    } catch {
-      // ignore network error on logout
-    }
-    storage.removeItem(AUTH_SESSION_STORAGE_KEY);
-    setOAuthUser(null);
-    setAuthMode(customApiKey ? 'guest-key' : 'guest-free');
+  const handleOpenApiKeySetup = () => {
+    setRouteAfterApiKey(null);
+    setApiKeyModalOpen(true);
   };
 
-  const handleConsumeQuota = () => {
-    const result = consumeFreeTierPrompt(storage);
-    setQuotaStatus(result.status);
-    return result.allowed;
+  const handleOpenAiChat = (prompt?: string) => {
+    if (prompt) setPendingAiPrompt(prompt);
+    if (customApiKey.trim()) {
+      setRoute('ai');
+      return;
+    }
+    setRouteAfterApiKey('ai');
+    setApiKeyModalOpen(true);
+  };
+
+  const handleNavigate = (nextRoute: AppRoute) => {
+    if (nextRoute === 'ai') {
+      handleOpenAiChat();
+      return;
+    }
+    setRoute(nextRoute);
+  };
+
+  const handleSaveApiKeyFromModal = (key: string) => {
+    handleSaveCustomKey(key);
+    setApiKeyModalOpen(false);
+    if (routeAfterApiKey) setRoute(routeAfterApiKey);
+    setRouteAfterApiKey(null);
   };
 
   const handleToggleDockOrientation = () => {
@@ -609,7 +540,6 @@ export default function App() {
       data-resolved-theme={resolvedTheme}
       data-default-dark={defaultDarkVariant}
       data-dock-orientation={dockOrientation}
-      data-auth-mode={authMode}
       data-location-status={locationState.status}
     >
       <AtmosphericBackground resolvedTheme={resolvedTheme} ambientGlow={aqiBand.ambientGlow} />
@@ -714,7 +644,7 @@ export default function App() {
       {!isLanding && (
         <FloatingDock
           activeRoute={route}
-          onNavigate={setRoute}
+          onNavigate={handleNavigate}
           orientation={dockOrientation}
           onToggleOrientation={handleToggleDockOrientation}
           resolvedTheme={resolvedTheme}
@@ -739,12 +669,10 @@ export default function App() {
               telemetryLoading={telemetryLoading}
               locationState={locationState}
               onOpenLocationGate={() => setLocationModalOpen(true)}
-              quotaStatus={quotaStatus}
               customApiKey={customApiKey}
-              authMode={authMode}
               onEnterFreeTier={handleEnterFreeTier}
               onEnterWithCustomKey={handleEnterWithCustomKey}
-              onOpenOAuth={handleRequestOAuth}
+              onOpenApiKeySetup={handleOpenApiKeySetup}
             />
           </motion.div>
         ) : (
@@ -795,23 +723,13 @@ export default function App() {
 
                 <PWAInstallButton variant="compact" />
 
-                {authMode === 'oauth' && oauthUser ? (
-                  <button
-                    type="button"
-                    onClick={() => setRoute('settings')}
-                    className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-medium text-emerald-500 max-w-[96px] sm:max-w-none shrink-0 cursor-pointer"
-                  >
-                    <span className="truncate">{oauthUser.name}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setOAuthModalOpen(true)}
-                    className={`rounded-lg border px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${tokens.btnSecondary}`}
-                  >
-                    Sign in
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setRoute('settings')}
+                  className={`rounded-lg border px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${tokens.btnSecondary}`}
+                >
+                  {customApiKey ? 'API key saved' : 'Add API key'}
+                </button>
               </div>
             </header>
 
@@ -834,14 +752,10 @@ export default function App() {
                     onChangeDockOrientation={handleChangeDockOrientation}
                     locationState={locationState}
                     onOpenLocationGate={() => setLocationModalOpen(true)}
-                    authMode={authMode}
-                    oauthUser={oauthUser}
                     customApiKey={customApiKey}
-                    quotaStatus={quotaStatus}
                     onSaveCustomKey={handleSaveCustomKey}
                     onClearCustomKey={handleClearCustomKey}
-                    onOpenOAuth={() => setOAuthModalOpen(true)}
-                    onSignOut={handleSignOut}
+                    onOpenApiKeySetup={handleOpenApiKeySetup}
                   />
                 ) : !telemetry ? (
                   renderTelemetryPlaceholder()
@@ -855,25 +769,17 @@ export default function App() {
                         onRefresh={() => loadTelemetry(locationState)}
                         locationState={locationState}
                         onOpenLocationGate={() => setLocationModalOpen(true)}
-                        onNavigate={setRoute}
+                        onNavigate={handleNavigate}
                         onAskAi={(prompt) => {
-                          setPendingAiPrompt(prompt);
-                          setRoute('ai');
+                          handleOpenAiChat(prompt);
                         }}
-                        authMode={authMode}
-                        quotaStatus={quotaStatus}
                       />
                     )}
                     {route === 'ai' && (
                       <AIChatView
                         resolvedTheme={resolvedTheme}
                         city={telemetry}
-                        authMode={authMode}
                         customApiKey={customApiKey}
-                        quotaStatus={quotaStatus}
-                        onConsumeQuota={handleConsumeQuota}
-                        onOpenOAuth={() => setOAuthModalOpen(true)}
-                        onGoToSettings={() => setRoute('settings')}
                         initialPrompt={pendingAiPrompt}
                         onClearInitialPrompt={() => setPendingAiPrompt(null)}
                       />
@@ -882,9 +788,8 @@ export default function App() {
                       <MapView
                         resolvedTheme={resolvedTheme}
                         city={telemetry}
-                        authMode={authMode}
                         customApiKey={customApiKey}
-                        onOpenOAuth={() => setOAuthModalOpen(true)}
+                        onRequireApiKey={handleOpenApiKeySetup}
                         backgroundTasks={backgroundTasks}
                         activeTaskResult={activeTaskResult}
                         onClearActiveTaskResult={() => setActiveTaskResult(null)}
@@ -914,11 +819,15 @@ export default function App() {
         onConfirmLocation={handleConfirmLocation}
       />
 
-      <OAuthModal
-        isOpen={oauthModalOpen}
+      <GeminiApiKeySetupModal
+        isOpen={apiKeyModalOpen}
         resolvedTheme={resolvedTheme}
-        onClose={() => setOAuthModalOpen(false)}
-        onSuccess={handleOAuthSuccess}
+        initialKey={customApiKey}
+        onClose={() => {
+          setApiKeyModalOpen(false);
+          setRouteAfterApiKey(null);
+        }}
+        onSave={handleSaveApiKeyFromModal}
       />
     </div>
     </MotionConfig>

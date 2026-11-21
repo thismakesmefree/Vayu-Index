@@ -26,7 +26,7 @@ import {
   Tornado,
   Wind,
 } from 'lucide-react';
-import { AppRoute, AuthMode, ResolvedTheme, UserLocationState } from '../types';
+import { AppRoute, ResolvedTheme, UserLocationState } from '../types';
 import {
   buildTodaySuggestions,
   calculateCigaretteEquivalence,
@@ -37,7 +37,6 @@ import {
   PollutantMetric,
   TodaySuggestion,
 } from '../utils/airQuality';
-import { QuotaStatus } from '../utils/quota';
 import { getThemeTokens } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 import { ScrollRevealCard } from './ScrollRevealCard';
@@ -51,8 +50,6 @@ interface DashboardViewProps {
   onOpenLocationGate: () => void;
   onNavigate: (route: AppRoute) => void;
   onAskAi?: (prompt: string) => void;
-  authMode: AuthMode;
-  quotaStatus: QuotaStatus;
 }
 
 const Sparkline: React.FC<{ data: number[]; color: string }> = ({ data, color }) => {
@@ -174,8 +171,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenLocationGate,
   onNavigate,
   onAskAi,
-  authMode,
-  quotaStatus,
 }) => {
   const [newsFilter, setNewsFilter] = useState<'All' | NewsFeedItem['category']>('All');
   const [expandedNewsId, setExpandedNewsId] = useState<string | null>(telemetry.newsFeed[0]?.id ?? null);
@@ -581,11 +576,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <h2 className={`font-display text-sm font-semibold ${tokens.textPrimary}`}>
                   Localized Resilience Coach
                 </h2>
-                {authMode === 'guest-free' && (
-                  <span className={`font-mono-tabular text-xs font-semibold ${tokens.accentText}`}>
-                    {quotaStatus.remaining}/{quotaStatus.limit} left
-                  </span>
-                )}
               </div>
               <p className={`text-xs leading-relaxed ${tokens.textSecondary}`}>
                 Ask Gemini 3.8 Flash for commute, ventilation, and exposure adjustments tailored to{' '}

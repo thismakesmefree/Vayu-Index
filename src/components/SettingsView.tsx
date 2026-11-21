@@ -1,15 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Bell,
   Check,
   KeyRound,
   LocateFixed,
-  LogOut,
   Monitor,
   Moon,
   PanelBottom,
   PanelLeft,
-  ShieldCheck,
   Smartphone,
   Sparkles,
   Sun,
@@ -17,15 +15,12 @@ import {
   Vibrate,
 } from 'lucide-react';
 import {
-  AuthMode,
   DefaultDarkVariant,
   DockOrientation,
-  OAuthUser,
   ResolvedTheme,
   ThemeMode,
   UserLocationState,
 } from '../types';
-import { QuotaStatus } from '../utils/quota';
 import { getThemeTokens } from '../utils/theme';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ScrollRevealCard } from './ScrollRevealCard';
@@ -51,14 +46,10 @@ interface SettingsViewProps {
   onChangeDockOrientation: (orientation: DockOrientation) => void;
   locationState: UserLocationState;
   onOpenLocationGate: () => void;
-  authMode: AuthMode;
-  oauthUser: OAuthUser | null;
   customApiKey: string;
-  quotaStatus: QuotaStatus;
   onSaveCustomKey: (key: string) => void;
   onClearCustomKey: () => void;
-  onOpenOAuth: () => void;
-  onSignOut: () => void;
+  onOpenApiKeySetup: () => void;
 }
 
 const THEME_OPTIONS: {
@@ -83,14 +74,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onChangeDockOrientation,
   locationState,
   onOpenLocationGate,
-  authMode,
-  oauthUser,
   customApiKey,
-  quotaStatus,
   onSaveCustomKey,
   onClearCustomKey,
-  onOpenOAuth,
-  onSignOut,
+  onOpenApiKeySetup,
 }) => {
   const [keyDraft, setKeyDraft] = useState(customApiKey);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -101,6 +88,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const isMobile = detectMobileDevice();
 
   const tokens = getThemeTokens(resolvedTheme);
+
+  useEffect(() => {
+    setKeyDraft(customApiKey);
+  }, [customApiKey]);
 
   const handleKeySave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -267,7 +258,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </ScrollRevealCard>
         </div>
 
-        {/* Location, Account, OAuth & Quota Management */}
+        {/* Location & Gemini API Key Management */}
         <div className="lg:col-span-6 space-y-5">
           {/* Location Calibration Card */}
           <ScrollRevealCard immediate delay={0.04}>
@@ -374,131 +365,68 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className={`vayu-glass-panel rounded-2xl border p-5 space-y-4 ${tokens.surface}`}>
             <div className="flex items-center justify-between gap-3">
               <h2 className={`font-display text-base font-semibold ${tokens.textPrimary}`}>
-                Authentication &amp; Access Mode
+                Gemini API key
               </h2>
-              <span className={`text-xs font-medium ${tokens.accentText}`}>
-                {authMode === 'oauth'
-                  ? 'OAuth Active'
-                  : authMode === 'guest-key'
-                    ? 'Guest · Custom Key'
-                    : 'Guest · Free Tier'}
+              <span className={`text-xs font-medium ${customApiKey ? 'text-emerald-500' : 'text-amber-500'}`}>
+                {customApiKey ? 'Saved in this browser' : 'Not set'}
               </span>
             </div>
 
-            {authMode === 'oauth' && oauthUser ? (
-              <div className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 p-4 space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    {oauthUser.picture ? (
-                      <img
-                        src={oauthUser.picture}
-                        alt={oauthUser.name}
-                        referrerPolicy="no-referrer"
-                        className="h-10 w-10 rounded-full object-cover border border-[#38BDF8]/30"
-                      />
-                    ) : (
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#38BDF8]/20 text-sm font-bold text-[#38BDF8]">
-                        {oauthUser.avatarInitials}
-                      </div>
-                    )}
-                    <div>
-                      <p className={`text-sm font-semibold ${tokens.textPrimary}`}>{oauthUser.name}</p>
-                      <p className={`text-xs ${tokens.textMuted}`}>{oauthUser.email}</p>
-                    </div>
-                  </div>
-                  <ShieldCheck className="w-5 h-5 text-emerald-500" />
-                </div>
-                <p className="text-xs text-emerald-500 font-medium">
-                  Linked Gemini session attached. Low-Smog Route Planner unlocked.
+            <div className={`rounded-xl border p-4 flex items-center justify-between gap-4 ${tokens.surfaceSubtle}`}>
+              <div>
+                <p className={`text-sm font-medium ${tokens.textPrimary}`}>Need a key?</p>
+                <p className={`text-xs ${tokens.textMuted}`}>
+                  Follow the Google AI Studio setup steps. Vayu does not use Google sign-in.
                 </p>
-                <button
-                  type="button"
-                  onClick={onSignOut}
-                  className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer ${tokens.btnSecondary}`}
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span>Sign Out to Guest Mode</span>
-                </button>
               </div>
-            ) : (
-              <div className="space-y-4">
-                <div className={`rounded-xl border p-4 flex items-center justify-between gap-4 ${tokens.surfaceSubtle}`}>
-                  <div>
-                    <p className={`text-sm font-medium ${tokens.textPrimary}`}>Unlock Low-Smog Route Planner</p>
-                    <p className={`text-xs ${tokens.textMuted}`}>
-                      Sign in with OAuth for unrestricted AI coaching &amp; green corridor routing
-                    </p>
-                  </div>
+              <button
+                type="button"
+                onClick={onOpenApiKeySetup}
+                data-testid="settings-api-key-help-btn"
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${tokens.btnSecondary}`}
+              >
+                View setup tutorial
+              </button>
+            </div>
+
+            <form onSubmit={handleKeySave} className={`space-y-3 border-t pt-4 ${tokens.divider}`}>
+              <label htmlFor="settings-gemini-key" className={`block text-xs font-medium ${tokens.textSecondary}`}>
+                Personal Gemini API key
+              </label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <KeyRound className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${tokens.textMuted}`} />
+                  <input
+                    id="settings-gemini-key"
+                    type="password"
+                    autoComplete="off"
+                    value={keyDraft}
+                    onChange={(e) => setKeyDraft(e.target.value)}
+                    placeholder="Paste your API key"
+                    className={`h-10 w-full rounded-lg border pl-9 pr-3 text-xs focus:border-[#38BDF8] focus:outline-none ${tokens.input}`}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className={`rounded-lg border px-4 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${tokens.btnSecondary}`}
+                >
+                  {savedNotice ? 'Saved' : 'Save Key'}
+                </button>
+                {customApiKey && (
                   <button
                     type="button"
-                    onClick={onOpenOAuth}
-                    className="rounded-lg bg-gradient-to-r from-[#38BDF8] to-[#8B5CF6] px-4 py-2 text-xs font-semibold text-[#060609] whitespace-nowrap shrink-0 cursor-pointer"
+                    onClick={() => {
+                      setKeyDraft('');
+                      onClearCustomKey();
+                    }}
+                    aria-label="Remove saved Gemini API key"
+                    className="rounded-lg border border-red-400/25 bg-red-500/10 hover:bg-red-500/20 px-3 text-red-400 cursor-pointer"
                   >
-                    Sign in with OAuth
+                    <Trash2 className="w-4 h-4" />
                   </button>
-                </div>
-
-                {authMode === 'guest-free' && (
-                  <div className={`rounded-xl border p-4 space-y-2 ${tokens.surfaceSubtle}`}>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className={tokens.textSecondary}>Free Tier Daily Quota</span>
-                      <span className={`font-mono-tabular font-semibold ${tokens.accentText}`}>
-                        {quotaStatus.remaining} / {quotaStatus.limit} left today
-                      </span>
-                    </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-500/20">
-                      <div
-                        className="h-full rounded-full bg-[#38BDF8] transition-all"
-                        style={{
-                          width: `${(quotaStatus.remaining / quotaStatus.limit) * 100}%`,
-                        }}
-                      />
-                    </div>
-                    <p className={`text-[11px] ${tokens.textMuted}`}>
-                      Resets automatically at 00:00 local time ({quotaStatus.dateKey}).
-                    </p>
-                  </div>
                 )}
-
-                <form onSubmit={handleKeySave} className={`space-y-3 border-t pt-4 ${tokens.divider}`}>
-                  <label htmlFor="settings-gemini-key" className={`block text-xs font-medium ${tokens.textSecondary}`}>
-                    Personal Gemini API Key (Guest Unrestricted Mode)
-                  </label>
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <KeyRound className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${tokens.textMuted}`} />
-                      <input
-                        id="settings-gemini-key"
-                        type="password"
-                        value={keyDraft}
-                        onChange={(e) => setKeyDraft(e.target.value)}
-                        placeholder="AIzaSy..."
-                        className={`h-10 w-full rounded-lg border pl-9 pr-3 text-xs focus:border-[#38BDF8] focus:outline-none ${tokens.input}`}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      className={`rounded-lg border px-4 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${tokens.btnSecondary}`}
-                    >
-                      {savedNotice ? 'Saved' : 'Save Key'}
-                    </button>
-                    {customApiKey && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setKeyDraft('');
-                          onClearCustomKey();
-                        }}
-                        aria-label="Remove saved Gemini API key"
-                        className="rounded-lg border border-red-400/25 bg-red-500/10 hover:bg-red-500/20 px-3 text-red-400 cursor-pointer"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </form>
               </div>
-            )}
+            </form>
           </div>
           </ScrollRevealCard>
         </div>

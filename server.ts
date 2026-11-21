@@ -33,12 +33,7 @@ import {
   getGoogleMapsServerApiKey,
   resolveGeminiModel,
 } from './src/utils/integrationConfig.ts';
-import { getGeminiErrorHttpStatus } from './src/utils/geminiErrors.ts';
-import {
-  createSignedOAuthState,
-  resolveOAuthBaseUrl,
-  verifySignedOAuthState,
-} from './src/utils/oauthState.ts';
+import { getGeminiErrorHttpStatus, redactUserApiKey } from './src/utils/geminiErrors.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,7 +60,6 @@ interface ChatRequestBody {
   temperatureC?: number;
   windKmh?: number;
   userApiKey?: string;
-  authMode?: 'guest-free' | 'guest-key' | 'oauth';
   model?: 'gemini-3.8-flash' | 'gemini-3.5-flash-lite';
 }
 
@@ -191,7 +185,6 @@ export function createApiApp(): express.Express {
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
-      hasServerGeminiKey: Boolean(process.env.GEMINI_API_KEY),
       hasMapsBrowserKey: Boolean(getGoogleMapsBrowserApiKey(process.env)),
       hasMapsServerKey: Boolean(getGoogleMapsServerApiKey(process.env)),
     });
@@ -810,241 +803,8 @@ export function createApiApp(): express.Express {
     }
   });
 
-  const SESSION_COOKIE_NAME = 'vayu_oauth_session';
-  const SESSION_SECRET =
-    process.env.SESSION_SECRET ||
-    process.env.GOOGLE_CLIENT_SECRET ||
-    process.env.OAUTH_CLIENT_SECRET ||
-    crypto.randomBytes(32).toString('hex');
-
-  const getOAuthConfig = (req?: express.Request) => {
-    const clientId = (process.env.GOOGLE_CLIENT_ID || process.env.OAUTH_CLIENT_ID || '').trim();
-    const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || process.env.OAUTH_CLIENT_SECRET || '').trim();
-    const baseUrl = resolveOAuthBaseUrl(process.env, req?.headers);
-    const redirectUri = `${baseUrl}/auth/callback`;
-    const isHttps = baseUrl.startsWith('https://');
-    return {
-      clientId,
-      clientSecret,
-      baseUrl,
-      redirectUri,
-      isHttps,
-      configured: Boolean(clientId && clientSecret),
-    };
-  };
-
-  const signSessionCookie = (payload: Record<string, unknown>): string => {
-    const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-    const sig = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('base64url');
-    return `${encoded}.${sig}`;
-  };
-
-  const verifySessionCookie = (cookieHeader: string | undefined): {
-    name: string;
-    email: string;
-    picture?: string;
-    avatarInitials: string;
-    provider: string;
-  } | null => {
-    if (!cookieHeader) return null;
-    const parts = cookieHeader.split(';').map((c) => c.trim());
-    const found = parts.find((p) => p.startsWith(`${SESSION_COOKIE_NAME}=`));
-    if (!found) return null;
-    const rawVal = found.slice(SESSION_COOKIE_NAME.length + 1);
-    const dotIdx = rawVal.indexOf('.');
-    if (dotIdx <= 0) return null;
-    const encoded = rawVal.slice(0, dotIdx);
-    const sig = rawVal.slice(dotIdx + 1);
-    const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('base64url');
-    if (sig.length !== expectedSig.length) return null;
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
-    try {
-      const data = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-      if (!data || typeof data.email !== 'string' || !data.email) return null;
-      return {
-        name: typeof data.name === 'string' && data.name ? data.name : data.email,
-        email: data.email,
-        picture: typeof data.picture === 'string' ? data.picture : undefined,
-        avatarInitials: typeof data.avatarInitials === 'string' ? data.avatarInitials : 'U',
-        provider: typeof data.provider === 'string' ? data.provider : 'google',
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  app.get('/api/auth/status', (req, res) => {
-    const { configured, redirectUri } = getOAuthConfig(req);
-    const user = verifySessionCookie(req.headers.cookie);
-    res.json({
-      configured,
-      redirectUri,
-      authenticated: Boolean(user),
-      user,
-    });
-  });
-
-  app.get('/api/auth/url', (req, res) => {
-    const { clientId, configured, redirectUri } = getOAuthConfig(req);
-    if (!configured) {
-      res.status(503).json({
-        error:
-          'Google OAuth credentials are not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment variables (Vercel / AI Studio Secrets).',
-        missingCredentials: true,
-        redirectUri,
-      });
-      return;
-    }
-
-    // Stateless HMAC-signed CSRF state token — safe across Vercel serverless cold starts
-    const state = createSignedOAuthState(SESSION_SECRET);
-
-    const providerAuthUrl =
-      process.env.OAUTH_PROVIDER_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'openid email profile',
-      access_type: 'offline',
-      prompt: 'select_account',
-      state,
-    });
-
-    res.json({ url: `${providerAuthUrl}?${params.toString()}`, redirectUri });
-  });
-
-  const handleOAuthCallback = async (req: express.Request, res: express.Response) => {
-    const code = typeof req.query.code === 'string' ? req.query.code : '';
-    const state = typeof req.query.state === 'string' ? req.query.state : '';
-    const oauthErr = typeof req.query.error === 'string' ? req.query.error : '';
-
-    if (oauthErr) {
-      res.status(400).send(`
-        <html><body style="font-family:sans-serif;background:#0b0c10;color:#f8fafc;padding:24px;">
-          <p>Sign-in cancelled or denied (${oauthErr}). You may close this window.</p>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(oauthErr)} }, '*');
-              window.close();
-            }
-          </script>
-        </body></html>
-      `);
-      return;
-    }
-
-    if (!code || !state || !verifySignedOAuthState(state, SESSION_SECRET)) {
-      res.status(400).send('Invalid or expired OAuth state/code.');
-      return;
-    }
-
-    const { clientId, clientSecret, redirectUri, isHttps } = getOAuthConfig(req);
-    if (!clientId || !clientSecret) {
-      res.status(503).send('OAuth client credentials are not configured on the server.');
-      return;
-    }
-
-    try {
-      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          code,
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: redirectUri,
-          grant_type: 'authorization_code',
-        }),
-      });
-      const tokenData = (await tokenRes.json()) as { access_token?: string; error_description?: string };
-      if (!tokenRes.ok || !tokenData.access_token) {
-        throw new Error(tokenData.error_description || 'Token exchange failed');
-      }
-
-      const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` },
-      });
-      const profile = (await profileRes.json()) as {
-        name?: string;
-        email?: string;
-        picture?: string;
-      };
-      if (!profileRes.ok || !profile.email) {
-        throw new Error('Unable to read verified email from Google profile.');
-      }
-
-      const displayName = (profile.name || profile.email).trim();
-      const initials =
-        displayName
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 2)
-          .map((part) => part[0]?.toUpperCase() ?? '')
-          .join('') || profile.email[0].toUpperCase();
-
-      const userPayload = {
-        name: displayName,
-        email: profile.email,
-        picture: profile.picture,
-        avatarInitials: initials,
-        provider: 'google',
-      };
-
-      const cookieValue = signSessionCookie(userPayload);
-      res.cookie(SESSION_COOKIE_NAME, cookieValue, {
-        httpOnly: true,
-        secure: isHttps,
-        sameSite: isHttps ? 'none' : 'lax',
-        path: '/',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      res.send(`
-        <html>
-          <body style="font-family:sans-serif;background:#0b0c10;color:#f8fafc;padding:24px;">
-            <p>Authentication successful. This window will close automatically.</p>
-            <script>
-              if (window.opener) {
-                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-                window.close();
-              } else {
-                window.location.href = '/';
-              }
-            </script>
-          </body>
-        </html>
-      `);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'OAuth verification failed';
-      res.status(502).send(`
-        <html><body style="font-family:sans-serif;background:#0b0c10;color:#f8fafc;padding:24px;">
-          <p>OAuth Error: ${msg}</p>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(msg)} }, '*');
-              window.close();
-            }
-          </script>
-        </body></html>
-      `);
-    }
-  };
-
-  app.get(['/auth/callback', '/auth/callback/', '/api/auth/callback', '/api/auth/callback/'], handleOAuthCallback);
-
-  app.post('/api/auth/logout', (req, res) => {
-    const { isHttps } = getOAuthConfig(req);
-    res.clearCookie(SESSION_COOKIE_NAME, {
-      httpOnly: true,
-      secure: isHttps,
-      sameSite: isHttps ? 'none' : 'lax',
-      path: '/',
-    });
-    res.json({ ok: true });
-  });
-
   app.post('/api/ai/chat', async (req, res) => {
+    let requestApiKey = '';
     try {
       const body = (req.body || {}) as ChatRequestBody;
       const message = typeof body.message === 'string' ? body.message.trim() : '';
@@ -1057,18 +817,17 @@ export function createApiApp(): express.Express {
         typeof body.userApiKey === 'string' && body.userApiKey.trim().length > 0
           ? body.userApiKey.trim()
           : '';
+      requestApiKey = customKey;
 
-      const apiKey = customKey || process.env.GEMINI_API_KEY || '';
-      if (!apiKey) {
+      if (customKey.length < 12) {
         res.status(400).json({
-          error:
-            'No Gemini API key is configured on the server. Enter your personal Gemini API key in Guest Mode or configure GEMINI_API_KEY in Settings > Secrets.',
+          error: 'Add a valid personal Gemini API key to use AI chat.',
         });
         return;
       }
 
       const ai = new GoogleGenAI({
-        apiKey,
+        apiKey: customKey,
         httpOptions: {
           headers: {
             'User-Agent': 'aistudio-build',
@@ -1123,7 +882,9 @@ export function createApiApp(): express.Express {
       });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Unexpected error calling Gemini API.';
-      res.status(getGeminiErrorHttpStatus(err)).json({ error: errorMessage });
+      res.status(getGeminiErrorHttpStatus(err)).json({
+        error: redactUserApiKey(errorMessage, requestApiKey),
+      });
     }
   });
 
@@ -1848,7 +1609,7 @@ export function createApiApp(): express.Express {
       `Arrive ${destinationLabel} in ~${summary.optimalRoute.durationMin} min (${summary.optimalRoute.distanceKm} km)`,
     ];
 
-    const geminiKey = (userApiKey || '').trim() || process.env.GEMINI_API_KEY || '';
+    const geminiKey = (userApiKey || '').trim();
     if (geminiKey && !skipGeminiSummary) {
       try {
         const ai = new GoogleGenAI({
@@ -1997,7 +1758,7 @@ Return ONLY valid JSON with two keys:
         ? `Path modified at ${modifiedPoints.length} journey checkpoint${modifiedPoints.length > 1 ? 's' : ''}: ${modifiedPoints.map((p) => `#${p.pointIndex} (${p.kmFromStart} km)`).join(', ')}.`
         : `No detour was necessary — ${optimalLabel} already aligns with the cleanest wind-scoured corridor from start to finish.`;
 
-    const geminiKey = (body.userApiKey || '').trim() || process.env.GEMINI_API_KEY || '';
+    const geminiKey = (body.userApiKey || '').trim();
     if (!geminiKey) {
       res.json({
         explanation: {
@@ -2093,12 +1854,6 @@ Return ONLY valid JSON with:
   });
 
   app.post('/api/maps/optimize-route', async (req, res) => {
-    const user = verifySessionCookie(req.headers.cookie);
-    if (!user) {
-      res.status(401).json({ error: 'Google OAuth sign-in is required to grant Gemini map routing access.' });
-      return;
-    }
-
     const body = (req.body || {}) as {
       origin?: LatLngPoint;
       destination?: LatLngPoint;
@@ -2107,6 +1862,11 @@ Return ONLY valid JSON with:
       transitMode?: TransitMode;
       userApiKey?: string;
     };
+    const userApiKey = typeof body.userApiKey === 'string' ? body.userApiKey.trim() : '';
+    if (userApiKey.length < 12) {
+      res.status(400).json({ error: 'Add a valid personal Gemini API key to optimize a route.' });
+      return;
+    }
 
     const origin = body.origin;
     const destination = body.destination;
@@ -2140,7 +1900,7 @@ Return ONLY valid JSON with:
         destinationLabel: String(body.destinationLabel || 'Destination Pin'),
         transitMode: body.transitMode || 'drive',
         sampleCount: 6,
-        userApiKey: body.userApiKey,
+        userApiKey,
         isLongRangeBackground: false,
       });
       res.json({ result });
@@ -2153,7 +1913,6 @@ Return ONLY valid JSON with:
 
   interface StoredBackgroundTask {
     id: string;
-    ownerEmail: string;
     status: 'pending' | 'running' | 'completed' | 'failed';
     progress: number;
     stage: string;
@@ -2221,17 +1980,14 @@ Return ONLY valid JSON with:
       task.status = 'failed';
       task.progress = 100;
       task.stage = 'Background Gemini optimization failed.';
-      task.error = err instanceof Error ? err.message : 'Task failed unexpectedly.';
+      task.error = redactUserApiKey(
+        err instanceof Error ? err.message : 'Task failed unexpectedly.',
+        userApiKey
+      );
     }
   };
 
   app.post('/api/routes/background-tasks', (req, res) => {
-    const user = verifySessionCookie(req.headers.cookie);
-    if (!user) {
-      res.status(401).json({ error: 'Google OAuth sign-in is required for background Gemini route tasks.' });
-      return;
-    }
-
     const body = (req.body || {}) as {
       origin?: LatLngPoint;
       destination?: LatLngPoint;
@@ -2240,6 +1996,11 @@ Return ONLY valid JSON with:
       transitMode?: TransitMode;
       userApiKey?: string;
     };
+    const userApiKey = typeof body.userApiKey === 'string' ? body.userApiKey.trim() : '';
+    if (userApiKey.length < 12) {
+      res.status(400).json({ error: 'Add a valid personal Gemini API key to start a background route task.' });
+      return;
+    }
 
     const origin = body.origin;
     const destination = body.destination;
@@ -2263,10 +2024,9 @@ Return ONLY valid JSON with:
       return;
     }
 
-    const id = `bg-${crypto.randomBytes(5).toString('hex')}`;
+    const id = `bg-${crypto.randomBytes(16).toString('hex')}`;
     const task: StoredBackgroundTask = {
       id,
-      ownerEmail: user.email,
       status: 'pending',
       progress: 10,
       stage: 'Queued background Gemini route task...',
@@ -2286,31 +2046,13 @@ Return ONLY valid JSON with:
       if (oldestKey) backgroundRouteTasks.delete(oldestKey);
     }
 
-    void executeBackgroundRouteTask(id, body.userApiKey);
+    void executeBackgroundRouteTask(id, userApiKey);
     res.status(202).json({ task: toPublicTask(task) });
   });
 
-  app.get('/api/routes/background-tasks', (req, res) => {
-    const user = verifySessionCookie(req.headers.cookie);
-    if (!user) {
-      res.json({ tasks: [] });
-      return;
-    }
-    const list = Array.from(backgroundRouteTasks.values())
-      .filter((t) => t.ownerEmail === user.email)
-      .reverse()
-      .map(toPublicTask);
-    res.json({ tasks: list });
-  });
-
   app.get('/api/routes/background-tasks/:id', (req, res) => {
-    const user = verifySessionCookie(req.headers.cookie);
-    if (!user) {
-      res.status(401).json({ error: 'OAuth session required.' });
-      return;
-    }
     const task = backgroundRouteTasks.get(req.params.id);
-    if (!task || task.ownerEmail !== user.email) {
+    if (!task) {
       res.status(404).json({ error: 'Background task not found.' });
       return;
     }

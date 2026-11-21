@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getGeminiErrorHttpStatus } from './geminiErrors';
+import { getGeminiErrorHttpStatus, redactUserApiKey } from './geminiErrors';
 
 test('preserves Gemini SDK HTTP statuses for authentication, billing, and model errors', () => {
   assert.equal(getGeminiErrorHttpStatus(Object.assign(new Error('Unauthorized'), { status: 401 })), 401);
@@ -23,4 +23,10 @@ test('ignores invalid error status values and preserves legacy message classific
     403
   );
   assert.equal(getGeminiErrorHttpStatus({ status: '401' }), 500);
+});
+
+test('redacts a user API key from provider error text', () => {
+  const key = 'user-owned-test-api-key';
+  assert.equal(redactUserApiKey(`Provider error included ${key}`, key), 'Provider error included [redacted]');
+  assert.equal(redactUserApiKey('Provider error without a key', undefined), 'Provider error without a key');
 });
