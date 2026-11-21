@@ -50,6 +50,7 @@ import {
 } from '../utils/airQuality';
 import { triggerHaptic } from '../utils/haptics';
 import { getNotificationPermissionState, requestNotificationPermission } from '../utils/notifications';
+import { MAPS_QUOTA_EXCEEDED_EVENT } from '../utils/mapsErrors';
 import {
   isBackgroundTaskRequired,
   isBetaGoogleTravelMode,
@@ -586,7 +587,7 @@ export const MapView: React.FC<MapViewProps> = ({
         `/api/maps/layer-grid?lat=${mapCenter.lat.toFixed(4)}&lon=${mapCenter.lng.toFixed(4)}&spanKm=${layerSpanKm}`
       );
       if (res.status === 429) {
-        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+        window.dispatchEvent(new CustomEvent(MAPS_QUOTA_EXCEEDED_EVENT));
       }
       if (!res.ok) return;
       const data = (await res.json()) as { nodes?: MapLayerNode[] };
@@ -688,7 +689,7 @@ export const MapView: React.FC<MapViewProps> = ({
         }),
       });
       if (res.status === 429) {
-        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+        window.dispatchEvent(new CustomEvent(MAPS_QUOTA_EXCEEDED_EVENT));
       }
       const data = await res.json();
       if (!res.ok || !data.result) {

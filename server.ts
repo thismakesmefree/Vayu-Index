@@ -33,6 +33,7 @@ import {
   getGoogleMapsServerApiKey,
   resolveGeminiModel,
 } from './src/utils/integrationConfig.ts';
+import { getGeminiErrorHttpStatus } from './src/utils/geminiErrors.ts';
 import {
   createSignedOAuthState,
   resolveOAuthBaseUrl,
@@ -1122,15 +1123,7 @@ export function createApiApp(): express.Express {
       });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Unexpected error calling Gemini API.';
-      const status =
-        errorMessage.includes('API_KEY_INVALID') || errorMessage.includes('400')
-          ? 400
-          : errorMessage.includes('PERMISSION_DENIED') || errorMessage.includes('403')
-            ? 403
-            : errorMessage.includes('RESOURCE_EXHAUSTED') || errorMessage.includes('429')
-              ? 429
-              : 500;
-      res.status(status).json({ error: errorMessage });
+      res.status(getGeminiErrorHttpStatus(err)).json({ error: errorMessage });
     }
   });
 
