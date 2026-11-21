@@ -10,9 +10,8 @@ import {
 } from '../utils/notifications';
 import { getThemeTokens } from '../utils/theme';
 import {
-  parseCoordinateInput,
   reverseGeocodeCoords,
-  searchGlobalLocations,
+  searchIndianLocations,
 } from '../utils/location';
 
 interface LocationGateModalProps {
@@ -36,7 +35,6 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
   const [manualInput, setManualInput] = useState('');
   const [searchResults, setSearchResults] = useState<LocationSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedResult, setSelectedResult] = useState<LocationSearchResult | null>(null);
   const [manualError, setManualError] = useState<string | null>(null);
   const [enableNotifications, setEnableNotifications] = useState<boolean>(true);
   const [notifPerm, setNotifPerm] = useState<NotificationPermissionState>(() =>
@@ -56,20 +54,16 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
   useEffect(() => {
     if (step !== 'manual') return;
     const trimmed = manualInput.trim();
-    if (trimmed.length < 2 || parseCoordinateInput(trimmed)) {
+    if (trimmed.length < 2) {
       setSearchResults([]);
       setIsSearching(false);
-      return;
-    }
-
-    if (selectedResult && selectedResult.displayLabel === trimmed) {
       return;
     }
 
     const timer = window.setTimeout(async () => {
       setIsSearching(true);
       try {
-        const results = await searchGlobalLocations(trimmed);
+        const results = await searchIndianLocations(trimmed);
         setSearchResults(results);
       } catch {
         setSearchResults([]);
@@ -79,7 +73,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
     }, 260);
 
     return () => window.clearTimeout(timer);
-  }, [manualInput, step, selectedResult]);
+  }, [manualInput, step]);
 
   const maybeRequestNotifications = async () => {
     if (!enableNotifications) return;
@@ -122,7 +116,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
         setIsDetecting(false);
         triggerHaptic('warning');
         setGeoMessage(
-          'Location permission was declined or unavailable. Enter your city, town, or coordinates manually to load live telemetry.'
+          'Location permission was declined or unavailable. Search for an Indian city, town, or village to load live telemetry.'
         );
         setStep('manual');
       },
@@ -132,14 +126,18 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
 
   const handleDeclineLocation = () => {
     triggerHaptic('light');
-    setGeoMessage('Location access declined. Search and select your real city or enter coordinates manually to continue.');
+    setGeoMessage('Location access declined. Search and select an Indian city, town, or village to continue.');
     setStep('manual');
   };
 
   const confirmSearchResult = async (item: LocationSearchResult) => {
+    if (item.countryCode?.toUpperCase() !== 'IN') {
+      setManualError('Choose a location in India from the search results.');
+      return;
+    }
     triggerHaptic('success');
     await maybeRequestNotifications();
-    const region = [item.admin1, item.country].filter(Boolean).join(', ') || 'Global Telemetry';
+    const region = [item.admin1, item.country || 'India'].filter(Boolean).join(', ');
     onConfirmLocation({
       status: 'manual',
       label: item.name,
@@ -156,51 +154,28 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
     const trimmed = manualInput.trim();
     if (trimmed.length < 2) {
       triggerHaptic('warning');
-      setManualError('Enter your city, town, postal region, or latitude, longitude coordinates.');
+      setManualError('Enter an Indian city, town, village, or locality.');
       return;
     }
 
     await maybeRequestNotifications();
 
-    const parsedCoords = parseCoordinateInput(trimmed);
-    if (parsedCoords) {
-      setManualError(null);
-      setIsSearching(true);
-      const rev = await reverseGeocodeCoords(parsedCoords.lat, parsedCoords.lon);
-      setIsSearching(false);
-      triggerHaptic('success');
-      onConfirmLocation({
-        status: 'manual',
-        label: rev.label,
-        region: rev.region,
-        country: rev.country,
-        coords: parsedCoords,
-        source: 'coords',
-      });
-      return;
-    }
-
-    if (selectedResult && selectedResult.displayLabel === trimmed) {
-      await confirmSearchResult(selectedResult);
-      return;
-    }
-
     setManualError(null);
     setIsSearching(true);
     try {
-      const results = searchResults.length > 0 ? searchResults : await searchGlobalLocations(trimmed);
+      const results = await searchIndianLocations(trimmed);
+      setSearchResults(results);
       if (results.length === 0) {
         triggerHaptic('warning');
-        setManualError('No matching location found. Try a nearby city name or enter lat, lon (e.g. 35.68, 139.76).');
-        setIsSearching(false);
+        setManualError('No matching Indian location found. Try a nearby city, town, or village.');
         return;
       }
-      setIsSearching(false);
-      await confirmSearchResult(results[0]);
+      setManualError('Select a location from the India results above.');
     } catch {
-      setIsSearching(false);
       triggerHaptic('warning');
-      setManualError('Location lookup failed. Check your connection or enter lat, lon coordinates.');
+      setManualError('Location lookup failed. Check your connection and try again.');
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -222,7 +197,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
             transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-            className={`vayu-glass-elevated w-full max-w-md rounded-2xl border p-6 ${tokens.surfaceElevated}`}
+            className={`vayu-glass-elevated max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border p-6 ${tokens.surfaceElevated}`}
           >
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -255,7 +230,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
             {step === 'prompt' ? (
               <div className="mt-5 space-y-4">
                 <p className={`text-sm leading-relaxed ${tokens.textSecondary}`}>
-                  Vayu Index never assumes your location. Share device coordinates for live AQI,
+                  Vayu Index never assumes your location. Share your location for live AQI,
                   meteorology, and maps—and enable notifications so &gt;100 km Gemini background
                   route tasks alert you when ready.
                 </p>
@@ -264,7 +239,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
                   <div className="flex items-start gap-2">
                     <Navigation className="w-4 h-4 text-[#38BDF8] shrink-0 mt-0.5" />
                     <span>
-                      If you decline GPS access, you can search and choose your city or coordinates manually.
+                      If you decline GPS access, search and choose an Indian city, town, or village manually.
                     </span>
                   </div>
 
@@ -340,7 +315,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
 
                 <div>
                   <label htmlFor="manual-location-input" className={`block text-xs font-semibold mb-1.5 ${tokens.textSecondary}`}>
-                    Search City, Town, or Coordinates (Required)
+                    Search an Indian City, Town, or Village
                   </label>
                   <div className="relative">
                     <Search className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${tokens.textMuted}`} />
@@ -349,12 +324,16 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
                       data-testid="manual-location-input"
                       type="text"
                       value={manualInput}
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-controls="location-search-results"
+                      aria-expanded={searchResults.length > 0}
                       onChange={(e) => {
                         setManualInput(e.target.value);
-                        setSelectedResult(null);
+                        setSearchResults([]);
                         if (manualError) setManualError(null);
                       }}
-                      placeholder="Search any city worldwide or enter lat, lon..."
+                      placeholder="Search a city, town, village, or locality in India..."
                       autoFocus
                       className={`h-11 w-full rounded-lg border pl-9 pr-9 text-sm focus:border-[#38BDF8] focus:outline-none ${tokens.input}`}
                     />
@@ -365,24 +344,25 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
 
                   {searchResults.length > 0 && (
                     <ul
+                      id="location-search-results"
+                      role="listbox"
                       data-testid="location-search-results"
-                      className={`mt-2 max-h-48 overflow-y-auto rounded-xl border divide-y ${tokens.surfaceSubtle} ${tokens.divider}`}
+                      className={`mt-2 max-h-[50vh] overflow-y-auto rounded-xl border divide-y ${tokens.surfaceSubtle} ${tokens.divider}`}
                     >
                       {searchResults.map((item) => (
                         <li key={item.id}>
                           <button
                             type="button"
+                            role="option"
+                            aria-selected="false"
                             onClick={() => confirmSearchResult(item)}
-                            className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-xs hover:bg-[#38BDF8]/10 transition-colors cursor-pointer"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-[#38BDF8]/10 transition-colors cursor-pointer"
                           >
                             <span className="flex items-center gap-2 min-w-0">
                               <MapPin className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
                               <span className={`truncate font-medium ${tokens.textPrimary}`}>
                                 {item.displayLabel}
                               </span>
-                            </span>
-                            <span className={`font-mono-tabular text-[10px] shrink-0 ${tokens.textMuted}`}>
-                              {item.lat.toFixed(2)}°, {item.lon.toFixed(2)}°
                             </span>
                           </button>
                         </li>
@@ -434,7 +414,7 @@ export const LocationGateModal: React.FC<LocationGateModalProps> = ({
                     data-testid="manual-location-submit"
                     className="flex h-11 flex-1 items-center justify-center rounded-lg bg-gradient-to-r from-[#38BDF8] to-[#8B5CF6] text-sm font-semibold text-[#060609] hover:brightness-110 transition-all disabled:opacity-60 cursor-pointer"
                   >
-                    {isSearching ? 'Resolving Location...' : 'Confirm Location & Load Telemetry'}
+                    {isSearching ? 'Searching Indian locations...' : 'Search locations'}
                   </button>
                 </div>
               </form>

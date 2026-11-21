@@ -25,6 +25,8 @@ import type {
 } from './src/utils/routeOptimizer.ts';
 import type { TransitMode } from './src/utils/airQuality.ts';
 import { PAN_INDIA_AQI_STATIONS } from './src/utils/indiaGrid.ts';
+import { normalizeLocationSearchResults } from './src/utils/location.ts';
+import type { GeocodingLocationResult } from './src/utils/location.ts';
 import type { JourneyExplanationPoint, RouteStepSegment } from './src/types.ts';
 import {
   GEMINI_FLASH_MODEL,
@@ -192,46 +194,32 @@ export function createApiApp(): express.Express {
 
   app.get('/api/location/search', async (req, res) => {
     const q = String(req.query.q ?? '').trim();
+    const countryCode = String(req.query.countryCode ?? '').trim().toUpperCase();
     if (q.length < 2) {
       res.json({ results: [] });
       return;
     }
+    if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) {
+      res.status(400).json({ error: 'Country code must be a two-letter ISO code.' });
+      return;
+    }
 
     try {
-      const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`;
+      const params = new URLSearchParams({
+        name: q,
+        count: countryCode === 'IN' ? '100' : '8',
+        language: 'en',
+        format: 'json',
+      });
+      if (countryCode) params.set('countryCode', countryCode);
+      const url = `https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`Geocoding HTTP ${r.status}`);
       const data = (await r.json()) as {
-        results?: Array<{
-          id: number;
-          name: string;
-          admin1?: string;
-          country?: string;
-          country_code?: string;
-          latitude: number;
-          longitude: number;
-          timezone?: string;
-          elevation?: number;
-        }>;
+        results?: GeocodingLocationResult[];
       };
 
-      const results = (data.results ?? []).map((item) => {
-        const parts = [item.name, item.admin1, item.country].filter(Boolean);
-        return {
-          id: String(item.id),
-          name: item.name,
-          admin1: item.admin1,
-          country: item.country,
-          countryCode: item.country_code,
-          lat: item.latitude,
-          lon: item.longitude,
-          timezone: item.timezone,
-          elevation: item.elevation,
-          displayLabel: parts.join(', '),
-        };
-      });
-
-      res.json({ results });
+      res.json({ results: normalizeLocationSearchResults(data.results ?? [], countryCode || undefined) });
     } catch (err: unknown) {
       res.status(502).json({
         error: err instanceof Error ? err.message : 'Unable to search locations.',
@@ -293,6 +281,9 @@ export function createApiApp(): express.Express {
             city?: string;
             town?: string;
             village?: string;
+            hamlet?: string;
+            municipality?: string;
+            city_district?: string;
             suburb?: string;
             state?: string;
             country?: string;
@@ -300,7 +291,8 @@ export function createApiApp(): express.Express {
         };
         const a = nom.address;
         if (a) {
-          const cityPart = a.city || a.town || a.village || a.suburb;
+          const cityPart =
+            a.city || a.town || a.village || a.hamlet || a.municipality || a.city_district || a.suburb;
           const regionPart = [a.state, a.country].filter(Boolean).join(', ');
           if (cityPart) {
             res.json({
@@ -317,8 +309,8 @@ export function createApiApp(): express.Express {
     }
 
     res.json({
-      label: `${lat.toFixed(3)}°, ${lon.toFixed(3)}°`,
-      region: 'GPS Coordinates',
+      label: 'Nearby location',
+      region: 'Location name unavailable',
       country: '',
     });
   });

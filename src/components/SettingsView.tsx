@@ -22,6 +22,7 @@ import {
   UserLocationState,
 } from '../types';
 import { getThemeTokens } from '../utils/theme';
+import { getReadableLocationLabel } from '../utils/location';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ScrollRevealCard } from './ScrollRevealCard';
 import {
@@ -271,7 +272,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     Location Calibration
                   </h2>
                   <p className={`text-xs ${tokens.textMuted}`}>
-                    Active: {locationState.label} ({locationState.status === 'granted' ? 'GPS' : 'Manual'})
+                    Active: {getReadableLocationLabel(locationState.label)} ({locationState.status === 'granted' ? 'GPS' : 'Manual'})
                   </p>
                 </div>
               </div>
