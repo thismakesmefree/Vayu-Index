@@ -42,6 +42,7 @@ import {
 import { fetchLocationTelemetry, LOCATION_STORAGE_KEY } from './utils/location';
 import { triggerHaptic } from './utils/haptics';
 import { sendRouteReadyNotification } from './utils/notifications';
+import { MAPS_AUTH_FAILURE_EVENT, MAPS_QUOTA_EXCEEDED_EVENT } from './utils/mapsErrors';
 import type { LatLngPoint } from './utils/routeOptimizer';
 
 const PAGE_SPRING = {
@@ -202,6 +203,7 @@ export default function App() {
   const [oauthModalOpen, setOAuthModalOpen] = useState(false);
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+  const [gmpAuthFailure, setGmpAuthFailure] = useState(false);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundRouteTask[]>([]);
   const [activeTaskResult, setActiveTaskResult] = useState<BackgroundRouteTask | null>(null);
   const [routeReadyToast, setRouteReadyToast] = useState<BackgroundRouteTask | null>(null);
@@ -209,8 +211,13 @@ export default function App() {
 
   useEffect(() => {
     const onQuotaExceeded = () => setGmpQuotaExceeded(true);
-    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
-    return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    const onAuthFailure = () => setGmpAuthFailure(true);
+    window.addEventListener(MAPS_QUOTA_EXCEEDED_EVENT, onQuotaExceeded);
+    window.addEventListener(MAPS_AUTH_FAILURE_EVENT, onAuthFailure);
+    return () => {
+      window.removeEventListener(MAPS_QUOTA_EXCEEDED_EVENT, onQuotaExceeded);
+      window.removeEventListener(MAPS_AUTH_FAILURE_EVENT, onAuthFailure);
+    };
   }, []);
 
   useEffect(() => {
@@ -607,6 +614,29 @@ export default function App() {
     >
       <AtmosphericBackground resolvedTheme={resolvedTheme} ambientGlow={aqiBand.ambientGlow} />
       <OfflineIndicator />
+
+      {gmpAuthFailure && (
+        <div
+          role="alert"
+          data-testid="gmp-auth-failure-banner"
+          className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-950/90 px-4 py-2 text-xs text-amber-200 backdrop-blur-md"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              Google Maps rejected the configured key. This is not necessarily a quota error. Check that the Maps JavaScript API is enabled, billing is active, and the website referrer and API restrictions match this deployment.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setGmpAuthFailure(false)}
+            aria-label="Dismiss Google Maps authentication warning"
+            className="rounded p-1 hover:bg-amber-500/20 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {gmpQuotaExceeded && (
         <div

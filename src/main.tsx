@@ -2,26 +2,26 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import {
+  MAPS_AUTH_FAILURE_EVENT,
+  MAPS_QUOTA_EXCEEDED_EVENT,
+  isMapsQuotaConsoleError,
+} from './utils/mapsErrors';
 
-// Tier 1 Google Maps Platform Demo Key Quota Defense (installed before React renders)
 if (typeof window !== 'undefined') {
-  const notifyQuotaExceeded = () => {
-    window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+  const notifyMapsIssue = (eventName: string) => {
+    window.dispatchEvent(new CustomEvent(eventName));
   };
 
   (window as unknown as { gm_authFailure?: () => void }).gm_authFailure = () => {
-    notifyQuotaExceeded();
+    notifyMapsIssue(MAPS_AUTH_FAILURE_EVENT);
   };
 
   const origConsoleError = console.error;
   console.error = (...args: unknown[]) => {
     const joined = args.map((a) => String(a ?? '')).join(' ');
-    if (
-      joined.includes('OverQuotaMapError') ||
-      joined.includes('QuotaExceededError') ||
-      joined.includes('RESOURCE_EXHAUSTED')
-    ) {
-      notifyQuotaExceeded();
+    if (isMapsQuotaConsoleError(joined)) {
+      notifyMapsIssue(MAPS_QUOTA_EXCEEDED_EVENT);
     }
     origConsoleError.apply(console, args);
   };
