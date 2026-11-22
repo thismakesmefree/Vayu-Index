@@ -6,36 +6,28 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import {
-  buildCorridorCandidatePaths,
   buildJourneyPointsFromRoute,
-  computeUpwindViaWaypoint,
-  decodeEncodedPolyline,
-  estimateTransitDurationMin,
-  mapTransitModeToGoogleTravelMode,
-  measurePathDistanceKm,
   samplePathCoordinates,
   selectOptimalLowSmogRoute,
   SYNC_ROUTE_MAX_KM,
 } from './src/utils/routeOptimizer.ts';
 import type {
-  GoogleTravelMode,
   LatLngPoint,
   RouteCandidateInput,
   RouteSampleTelemetry,
 } from './src/utils/routeOptimizer.ts';
 import type { TransitMode } from './src/utils/airQuality.ts';
-import { PAN_INDIA_AQI_STATIONS } from './src/utils/indiaGrid.ts';
+import { PAN_INDIA_AQI_POINTS } from './src/utils/indiaGrid.ts';
 import { normalizeLocationSearchResults } from './src/utils/location.ts';
 import type { GeocodingLocationResult } from './src/utils/location.ts';
-import type { JourneyExplanationPoint, RouteStepSegment } from './src/types.ts';
+import type { JourneyExplanationPoint } from './src/types.ts';
 import {
   GEMINI_FLASH_MODEL,
   GEMINI_FLASH_LITE_MODEL,
-  getGoogleMapsBrowserApiKey,
-  getGoogleMapsServerApiKey,
   resolveGeminiModel,
 } from './src/utils/integrationConfig.ts';
 import { getGeminiErrorHttpStatus, redactUserApiKey } from './src/utils/geminiErrors.ts';
+import { buildOsrmRouteUrl, getOsrmProfile, parseOsrmRouteCandidates } from './src/utils/openRouting.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,11 +177,7 @@ export function createApiApp(): express.Express {
 
   app.get('/api/health', (_req, res) => {
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({
-      ok: true,
-      hasMapsBrowserKey: Boolean(getGoogleMapsBrowserApiKey(process.env)),
-      hasMapsServerKey: Boolean(getGoogleMapsServerApiKey(process.env)),
-    });
+    res.json({ ok: true });
   });
 
   app.get('/api/location/search', async (req, res) => {
@@ -267,45 +255,7 @@ export function createApiApp(): express.Express {
         }
       }
     } catch {
-      // fall through to nominatim
-    }
-
-    try {
-      const nomRes = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`,
-        { headers: { 'User-Agent': 'VayuIndexPWA/1.0' } }
-      );
-      if (nomRes.ok) {
-        const nom = (await nomRes.json()) as {
-          address?: {
-            city?: string;
-            town?: string;
-            village?: string;
-            hamlet?: string;
-            municipality?: string;
-            city_district?: string;
-            suburb?: string;
-            state?: string;
-            country?: string;
-          };
-        };
-        const a = nom.address;
-        if (a) {
-          const cityPart =
-            a.city || a.town || a.village || a.hamlet || a.municipality || a.city_district || a.suburb;
-          const regionPart = [a.state, a.country].filter(Boolean).join(', ');
-          if (cityPart) {
-            res.json({
-              label: a.state ? `${cityPart}, ${a.state}` : cityPart,
-              region: regionPart || 'GPS Calibrated',
-              country: a.country || '',
-            });
-            return;
-          }
-        }
-      }
-    } catch {
-      // fall through to coords label
+      // Return an explicit unknown-location label below when reverse geocoding is unavailable.
     }
 
     res.json({
@@ -328,7 +278,7 @@ export function createApiApp(): express.Express {
     const countryParam = String(req.query.country ?? '').trim();
 
     const offsetPoints = [
-      { id: 'center', name: labelParam || 'Central Station', zone: 'Calibrated Center', dLat: 0, dLon: 0, x: 50, y: 50 },
+      { id: 'center', name: labelParam || 'Calibrated Center', zone: 'Calibrated Center', dLat: 0, dLon: 0, x: 50, y: 50 },
       { id: 'north', name: 'North Sector (+8 km)', zone: 'Upwind Ridge', dLat: 0.072, dLon: 0, x: 50, y: 18 },
       { id: 'northeast', name: 'NE Corridor (+9 km)', zone: 'Outer Belt', dLat: 0.055, dLon: 0.065, x: 76, y: 26 },
       { id: 'southeast', name: 'SE Basin (+9 km)', zone: 'Arterial Edge', dLat: -0.055, dLon: 0.065, x: 76, y: 74 },
@@ -880,83 +830,7 @@ export function createApiApp(): express.Express {
     }
   });
 
-  const TRANSPARENT_1X1_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-    'base64'
-  );
-
-  app.get('/api/maps/config', (_req, res) => {
-    const apiKey = getGoogleMapsBrowserApiKey(process.env);
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.json({
-      configured: Boolean(apiKey),
-      apiKey,
-    });
-  });
-
-  app.get('/api/maps/aq-tile/:heatmapType/:z/:x/:y', async (req, res) => {
-    const heatmapType = String(req.params.heatmapType || 'US_AQI');
-    const allowedTypes = new Set([
-      'US_AQI',
-      'PM25_INDIGO_PERSIAN',
-      'UAQI_RED_GREEN',
-      'UAQI_INDIGO_PERSIAN',
-    ]);
-    if (!allowedTypes.has(heatmapType)) {
-      res.status(400).json({ error: 'Unsupported AQ heatmap type.' });
-      return;
-    }
-
-    const z = Number(req.params.z);
-    const x = Number(req.params.x);
-    const y = Number(req.params.y);
-    if (!Number.isInteger(z) || z < 0 || z > 16 || !Number.isInteger(x) || !Number.isInteger(y)) {
-      res.status(400).json({ error: 'Invalid tile coordinates.' });
-      return;
-    }
-    const maxCoord = 1 << z;
-    if (x < 0 || x >= maxCoord || y < 0 || y >= maxCoord) {
-      res.setHeader('Content-Type', 'image/png');
-      res.send(TRANSPARENT_1X1_PNG);
-      return;
-    }
-
-    const mapsKey = getGoogleMapsServerApiKey(process.env);
-    if (!mapsKey) {
-      res.setHeader('Content-Type', 'image/png');
-      res.send(TRANSPARENT_1X1_PNG);
-      return;
-    }
-
-    try {
-      const tileUrl = `https://airquality.googleapis.com/v1/mapTypes/${heatmapType}/heatmapTiles/${z}/${x}/${y}?key=${mapsKey}`;
-      const tileRes = await fetch(tileUrl, {
-        headers: { 'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio' },
-      });
-
-      if (tileRes.status === 429) {
-        res.status(429).json({ error: 'RESOURCE_EXHAUSTED: Maps Air Quality quota exceeded.' });
-        return;
-      }
-
-      if (!tileRes.ok) {
-        res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Cache-Control', 'public, max-age=120');
-        res.send(TRANSPARENT_1X1_PNG);
-        return;
-      }
-
-      const buf = Buffer.from(await tileRes.arrayBuffer());
-      res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Cache-Control', 'public, max-age=300');
-      res.send(buf);
-    } catch {
-      res.setHeader('Content-Type', 'image/png');
-      res.send(TRANSPARENT_1X1_PNG);
-    }
-  });
-
-  // 5-minute cached Pan-India 53-station AQI + Meteorology grid covering whole India
+  // 5-minute cached Pan-India modeled AQI and meteorology sample grid
   let indiaGridCache: { fetchedAt: number; nodes: Array<Record<string, unknown>> } | null = null;
   const INDIA_GRID_TTL_MS = 5 * 60 * 1000;
 
@@ -967,12 +841,12 @@ export function createApiApp(): express.Express {
     }
 
     try {
-      const mid = Math.ceil(PAN_INDIA_AQI_STATIONS.length / 2);
-      const chunks = [PAN_INDIA_AQI_STATIONS.slice(0, mid), PAN_INDIA_AQI_STATIONS.slice(mid)];
+      const mid = Math.ceil(PAN_INDIA_AQI_POINTS.length / 2);
+      const chunks = [PAN_INDIA_AQI_POINTS.slice(0, mid), PAN_INDIA_AQI_POINTS.slice(mid)];
 
-      const fetchChunk = async (stations: typeof PAN_INDIA_AQI_STATIONS) => {
-        const lats = stations.map((s) => s.lat.toFixed(4)).join(',');
-        const lons = stations.map((s) => s.lon.toFixed(4)).join(',');
+      const fetchChunk = async (points: typeof PAN_INDIA_AQI_POINTS) => {
+        const lats = points.map((point) => point.lat.toFixed(4)).join(',');
+        const lons = points.map((point) => point.lon.toFixed(4)).join(',');
         const [aqRes, wxRes] = await Promise.all([
           fetch(
             `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lats}&longitude=${lons}&current=us_aqi,pm2_5,nitrogen_dioxide,ozone`
@@ -981,41 +855,59 @@ export function createApiApp(): express.Express {
             `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=temperature_2m,wind_speed_10m,wind_direction_10m,precipitation,cloud_cover,weather_code`
           ),
         ]);
-        const aqJson = aqRes.ok ? await aqRes.json() : [];
-        const wxJson = wxRes.ok ? await wxRes.json() : [];
+        if (!aqRes.ok || !wxRes.ok) {
+          throw new Error('Open-Meteo air-quality or weather data is temporarily unavailable.');
+        }
+        const aqJson = await aqRes.json();
+        const wxJson = await wxRes.json();
         const aqArr = Array.isArray(aqJson) ? aqJson : [aqJson];
         const wxArr = Array.isArray(wxJson) ? wxJson : [wxJson];
 
-        return stations.map((st, idx) => {
+        return points.flatMap((point, idx) => {
           const aqC = aqArr[idx]?.current ?? {};
           const wxC = wxArr[idx]?.current ?? {};
+          const currentValues = [
+            aqC.us_aqi,
+            aqC.pm2_5,
+            aqC.nitrogen_dioxide,
+            aqC.ozone,
+            wxC.temperature_2m,
+            wxC.wind_speed_10m,
+            wxC.wind_direction_10m,
+            wxC.precipitation,
+            wxC.cloud_cover,
+            wxC.weather_code,
+          ];
+          if (!currentValues.every((value) => typeof value === 'number' && Number.isFinite(value))) return [];
+
           const windDirDeg = round0(wxC.wind_direction_10m, 0);
           const wmo = round0(wxC.weather_code, 0);
-          return {
-            id: `india-${st.id}`,
-            name: st.name,
-            state: st.state,
-            region: st.region,
+          return [{
+            id: `india-${point.id}`,
+            name: point.name,
+            state: point.state,
+            region: point.region,
             isIndiaWide: true,
-            lat: st.lat,
-            lon: st.lon,
-            aqi: round0(aqC.us_aqi, 65),
-            pm25: round1(aqC.pm2_5, 22),
-            no2: round1(aqC.nitrogen_dioxide, 14),
-            o3: round1(aqC.ozone, 36),
-            temperatureC: round1(wxC.temperature_2m, 28),
-            windKmh: round1(wxC.wind_speed_10m, 10),
+            lat: point.lat,
+            lon: point.lon,
+            aqi: round0(aqC.us_aqi),
+            pm25: round1(aqC.pm2_5),
+            no2: round1(aqC.nitrogen_dioxide),
+            o3: round1(aqC.ozone),
+            temperatureC: round1(wxC.temperature_2m),
+            windKmh: round1(wxC.wind_speed_10m),
             windDirDeg,
             windDir: degreesToCardinal(windDirDeg),
-            precipMm: round1(wxC.precipitation, 0),
-            cloudCoverPercent: round0(wxC.cloud_cover, 20),
+            precipMm: round1(wxC.precipitation),
+            cloudCoverPercent: round0(wxC.cloud_cover),
             weatherLabel: getWmoWeatherLabel(wmo),
-          };
+          }];
         });
       };
 
       const [firstHalf, secondHalf] = await Promise.all(chunks.map(fetchChunk));
       const nodes = [...firstHalf, ...secondHalf];
+      if (nodes.length === 0) throw new Error('No current AQI and weather readings are available for India.');
       indiaGridCache = { fetchedAt: Date.now(), nodes };
       res.json({ nodes, cached: false });
     } catch (err: unknown) {
@@ -1074,34 +966,52 @@ export function createApiApp(): express.Express {
         ),
       ]);
 
-      const aqJson = aqRes.ok ? await aqRes.json() : [];
-      const wxJson = wxRes.ok ? await wxRes.json() : [];
+      if (!aqRes.ok || !wxRes.ok) {
+        throw new Error('Open-Meteo air-quality or weather data is temporarily unavailable.');
+      }
+      const aqJson = await aqRes.json();
+      const wxJson = await wxRes.json();
       const aqArr = Array.isArray(aqJson) ? aqJson : [aqJson];
       const wxArr = Array.isArray(wxJson) ? wxJson : [wxJson];
 
-      const nodes = coords.map((pt, idx) => {
+      const nodes = coords.flatMap((pt, idx) => {
         const aqC = aqArr[idx]?.current ?? {};
         const wxC = wxArr[idx]?.current ?? {};
+        const currentValues = [
+          aqC.us_aqi,
+          aqC.pm2_5,
+          aqC.nitrogen_dioxide,
+          aqC.ozone,
+          wxC.temperature_2m,
+          wxC.wind_speed_10m,
+          wxC.wind_direction_10m,
+          wxC.precipitation,
+          wxC.cloud_cover,
+          wxC.weather_code,
+        ];
+        if (!currentValues.every((value) => typeof value === 'number' && Number.isFinite(value))) return [];
+
         const windDirDeg = round0(wxC.wind_direction_10m, 0);
         const wmo = round0(wxC.weather_code, 0);
-        return {
+        return [{
           id: pt.id,
           lat: pt.lat,
           lon: pt.lon,
-          aqi: round0(aqC.us_aqi, 25),
-          pm25: round1(aqC.pm2_5, 8),
-          no2: round1(aqC.nitrogen_dioxide, 10),
-          o3: round1(aqC.ozone, 30),
-          temperatureC: round1(wxC.temperature_2m, 18),
-          windKmh: round1(wxC.wind_speed_10m, 8),
+          aqi: round0(aqC.us_aqi),
+          pm25: round1(aqC.pm2_5),
+          no2: round1(aqC.nitrogen_dioxide),
+          o3: round1(aqC.ozone),
+          temperatureC: round1(wxC.temperature_2m),
+          windKmh: round1(wxC.wind_speed_10m),
           windDirDeg,
           windDir: degreesToCardinal(windDirDeg),
-          precipMm: round1(wxC.precipitation, 0),
-          cloudCoverPercent: round0(wxC.cloud_cover, 15),
+          precipMm: round1(wxC.precipitation),
+          cloudCoverPercent: round0(wxC.cloud_cover),
           weatherLabel: getWmoWeatherLabel(wmo),
-        };
+        }];
       });
 
+      if (nodes.length === 0) throw new Error('No current AQI and weather readings are available for this area.');
       res.json({ nodes });
     } catch (err: unknown) {
       res.status(502).json({
@@ -1124,401 +1034,74 @@ export function createApiApp(): express.Express {
           `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=temperature_2m,wind_speed_10m,wind_direction_10m,precipitation`
         ),
       ]);
-      const aqData = aqRes.ok ? await aqRes.json() : [];
-      const wxData = wxRes.ok ? await wxRes.json() : [];
+      if (!aqRes.ok || !wxRes.ok) {
+        throw new Error('Open-Meteo air-quality or weather data is temporarily unavailable.');
+      }
+      const aqData = await aqRes.json();
+      const wxData = await wxRes.json();
       const aqArr = Array.isArray(aqData) ? aqData : [aqData];
       const wxArr = Array.isArray(wxData) ? wxData : [wxData];
 
       return points.map((pt, idx) => {
         const aqC = aqArr[idx]?.current ?? {};
         const wxC = wxArr[idx]?.current ?? {};
+        const currentValues = [
+          aqC.us_aqi,
+          aqC.pm2_5,
+          wxC.temperature_2m,
+          wxC.wind_speed_10m,
+          wxC.wind_direction_10m,
+          wxC.precipitation,
+        ];
+        if (!currentValues.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+          throw new Error('Open-Meteo returned incomplete telemetry for a route sample.');
+        }
         return {
           lat: pt.lat,
           lon: pt.lon,
-          aqi: round0(aqC.us_aqi, 30),
-          pm25: round1(aqC.pm2_5, 10),
-          temperatureC: round1(wxC.temperature_2m, 18),
-          windKmh: round1(wxC.wind_speed_10m, 8),
+          aqi: round0(aqC.us_aqi),
+          pm25: round1(aqC.pm2_5),
+          temperatureC: round1(wxC.temperature_2m),
+          windKmh: round1(wxC.wind_speed_10m),
           windDirDeg: round0(wxC.wind_direction_10m, 0),
-          precipMm: round1(wxC.precipitation, 0),
+          precipMm: round1(wxC.precipitation),
         };
       });
-    } catch {
-      return points.map((pt) => ({
-        lat: pt.lat,
-        lon: pt.lon,
-        aqi: 30,
-        pm25: 10,
-        temperatureC: 18,
-        windKmh: 8,
-        windDirDeg: 0,
-        precipMm: 0,
-      }));
+    } catch (error: unknown) {
+      throw new Error(
+        error instanceof Error ? error.message : 'Unable to load current route telemetry.'
+      );
     }
   };
 
-  interface RawRoadCandidate {
-    id: string;
-    label: string;
-    isDefaultArterial?: boolean;
-    isRoadSnapped?: boolean;
-    distanceKm: number;
-    durationMin: number;
-    encodedPolyline?: string;
-    path: LatLngPoint[];
-    steps?: RouteStepSegment[];
-  }
-
-  const GOOGLE_ROUTES_FIELD_MASK = [
-    'routes.distanceMeters',
-    'routes.duration',
-    'routes.polyline.encodedPolyline',
-    'routes.routeLabels',
-    'routes.description',
-    'routes.legs.steps.distanceMeters',
-    'routes.legs.steps.staticDuration',
-    'routes.legs.steps.polyline.encodedPolyline',
-    'routes.legs.steps.startLocation',
-    'routes.legs.steps.endLocation',
-    'routes.legs.steps.navigationInstruction',
-    'routes.legs.steps.travelMode',
-    'routes.legs.steps.transitDetails',
-  ].join(',');
-
-  const parseGoogleSteps = (legs: any[] | undefined): RouteStepSegment[] => {
-    const out: RouteStepSegment[] = [];
-    if (!Array.isArray(legs)) return out;
-    let idxCounter = 0;
-    for (const leg of legs) {
-      const steps = Array.isArray(leg?.steps) ? leg.steps : [];
-      for (const st of steps) {
-        const startLat = st?.startLocation?.latLng?.latitude;
-        const startLon = st?.startLocation?.latLng?.longitude;
-        const endLat = st?.endLocation?.latLng?.latitude;
-        const endLon = st?.endLocation?.latLng?.longitude;
-        const encoded = st?.polyline?.encodedPolyline ?? '';
-        const decoded = encoded ? decodeEncodedPolyline(encoded) : [];
-        const startLoc =
-          Number.isFinite(startLat) && Number.isFinite(startLon)
-            ? { lat: Number(startLat.toFixed(5)), lon: Number(startLon.toFixed(5)) }
-            : decoded[0] ?? { lat: 0, lon: 0 };
-        const endLoc =
-          Number.isFinite(endLat) && Number.isFinite(endLon)
-            ? { lat: Number(endLat.toFixed(5)), lon: Number(endLon.toFixed(5)) }
-            : decoded[decoded.length - 1] ?? startLoc;
-
-        const td = st?.transitDetails;
-        const transitLine = td?.transitLine;
-        const transitInfo = td
-          ? {
-              lineName: String(transitLine?.name || transitLine?.nameShort || 'Transit Line'),
-              shortName: transitLine?.nameShort ? String(transitLine.nameShort) : undefined,
-              vehicleType: String(transitLine?.vehicle?.type || transitLine?.vehicle?.name?.text || 'TRANSIT'),
-              color: transitLine?.color ? String(transitLine.color) : undefined,
-              departureStop: String(td?.stopDetails?.departureStop?.name || 'Boarding Stop'),
-              arrivalStop: String(td?.stopDetails?.arrivalStop?.name || 'Alighting Stop'),
-              stopCount: typeof td?.stopCount === 'number' ? td.stopCount : undefined,
-              headsign: td?.headsign ? String(td.headsign) : undefined,
-            }
-          : undefined;
-
-        const durSec = Number(String(st?.staticDuration ?? '0s').replace('s', '')) || 0;
-        const instruction =
-          String(st?.navigationInstruction?.instructions || '').trim() ||
-          (transitInfo
-            ? `Board ${transitInfo.shortName || transitInfo.lineName} at ${transitInfo.departureStop} → ${transitInfo.arrivalStop}`
-            : `Continue via ${String(st?.travelMode || 'road').toLowerCase()}`);
-
-        out.push({
-          stepIndex: idxCounter++,
-          instruction,
-          maneuver: st?.navigationInstruction?.maneuver ? String(st.navigationInstruction.maneuver) : undefined,
-          travelMode: String(st?.travelMode || 'DRIVE'),
-          distanceMeters: Number(st?.distanceMeters || 0),
-          durationSec: durSec,
-          startLocation: startLoc,
-          endLocation: endLoc,
-          path: decoded.length >= 2 ? decoded : [startLoc, endLoc],
-          transitInfo,
-        });
-      }
-    }
-    return out;
-  };
-
-  const callGoogleComputeRoutes = async (args: {
-    origin: LatLngPoint;
-    destination: LatLngPoint;
-    travelMode: GoogleTravelMode;
-    mapsKey: string;
-    viaWaypoint?: LatLngPoint;
-    computeAlternativeRoutes?: boolean;
-  }): Promise<any[]> => {
-    const { origin, destination, travelMode, mapsKey, viaWaypoint, computeAlternativeRoutes = true } = args;
-    const payload: Record<string, unknown> = {
-      origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lon } } },
-      destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lon } } },
-      travelMode,
-      units: 'METRIC',
-      languageCode: 'en-US',
-    };
-
-    if (travelMode === 'DRIVE' || travelMode === 'TWO_WHEELER') {
-      payload.routingPreference = 'TRAFFIC_AWARE';
-    }
-    if (travelMode === 'TRANSIT') {
-      payload.transitPreferences = {
-        routingPreference: 'LESS_WALKING',
-        allowedTravelModes: ['RAIL', 'SUBWAY', 'TRAIN', 'BUS'],
-      };
-      payload.computeAlternativeRoutes = computeAlternativeRoutes;
-    } else if (viaWaypoint) {
-      payload.intermediates = [
-        {
-          location: { latLng: { latitude: viaWaypoint.lat, longitude: viaWaypoint.lon } },
-          via: true,
-        },
-      ];
-      payload.computeAlternativeRoutes = false;
-    } else {
-      payload.computeAlternativeRoutes = computeAlternativeRoutes;
-    }
-
-    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': mapsKey,
-        'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
-        'X-Goog-FieldMask': GOOGLE_ROUTES_FIELD_MASK,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) return [];
-    const data = (await res.json()) as { routes?: any[] };
-    return Array.isArray(data.routes) ? data.routes : [];
-  };
-
-  const fetchOsrmRoadFallback = async (
-    origin: LatLngPoint,
-    destination: LatLngPoint,
-    transitMode: TransitMode
-  ): Promise<RawRoadCandidate[]> => {
-    try {
-      const profile = transitMode === 'walk' ? 'foot' : transitMode === 'cycle' ? 'bike' : 'driving';
-      const url = `https://router.project-osrm.org/route/v1/${profile}/${origin.lon},${origin.lat};${destination.lon},${destination.lat}?overview=full&geometries=polyline&alternatives=true&steps=true`;
-      const res = await fetch(url);
-      if (!res.ok) return [];
-      const data = (await res.json()) as {
-        routes?: Array<{
-          distance?: number;
-          duration?: number;
-          geometry?: string;
-          legs?: Array<{
-            summary?: string;
-            steps?: Array<{
-              name?: string;
-              distance?: number;
-              duration?: number;
-              geometry?: string;
-              maneuver?: { type?: string; modifier?: string; location?: [number, number] };
-            }>;
-          }>;
-        }>;
-      };
-      return (data.routes ?? []).slice(0, 3).map((r, idx) => {
-        const decoded = r.geometry ? decodeEncodedPolyline(r.geometry) : [origin, destination];
-        const distKm = Number(((r.distance ?? 0) / 1000).toFixed(1)) || measurePathDistanceKm(decoded);
-        const durMin =
-          r.duration && r.duration > 0
-            ? Math.max(2, Math.round(r.duration / 60))
-            : estimateTransitDurationMin(distKm, transitMode);
-        const summaryName = r.legs?.[0]?.summary || '';
-        const steps: RouteStepSegment[] = (r.legs?.[0]?.steps ?? []).map((st, sIdx) => {
-          const stPath = st.geometry ? decodeEncodedPolyline(st.geometry) : [];
-          const loc = st.maneuver?.location
-            ? { lat: Number(st.maneuver.location[1].toFixed(5)), lon: Number(st.maneuver.location[0].toFixed(5)) }
-            : stPath[0] ?? origin;
-          const endLoc = stPath[stPath.length - 1] ?? loc;
-          const roadName = st.name?.trim() || 'arterial road';
-          const action = st.maneuver?.type ? `${st.maneuver.type} ${st.maneuver.modifier || ''}`.trim() : 'Continue';
-          return {
-            stepIndex: sIdx,
-            instruction: `${action} onto ${roadName}`.trim(),
-            maneuver: st.maneuver?.type,
-            travelMode: mapTransitModeToGoogleTravelMode(transitMode),
-            distanceMeters: Math.round(st.distance ?? 0),
-            durationSec: Math.round(st.duration ?? 0),
-            startLocation: loc,
-            endLocation: endLoc,
-            path: stPath.length >= 2 ? stPath : [loc, endLoc],
-          };
-        });
-        return {
-          id: `osrm-${idx + 1}`,
-          label: summaryName ? `${idx === 0 ? 'Primary' : 'Alt'} via ${summaryName}` : idx === 0 ? 'Primary Highway Corridor' : `Alternate Highway ${idx}`,
-          isDefaultArterial: idx === 0,
-          isRoadSnapped: true,
-          distanceKm: distKm,
-          durationMin: durMin,
-          encodedPolyline: r.geometry,
-          path: decoded,
-          steps,
-        };
-      });
-    } catch {
-      return [];
-    }
-  };
-
-  const fetchRoadAndTransitCandidates = async (params: {
+  const fetchOpenRouteCandidates = async (params: {
     origin: LatLngPoint;
     destination: LatLngPoint;
     transitMode: TransitMode;
-    windDirDeg: number;
-  }): Promise<{
-    candidates: RawRoadCandidate[];
-    googleTravelMode: GoogleTravelMode;
-    routingSource: 'google_routes' | 'osrm_roads' | 'corridor_fallback';
-  }> => {
-    const { origin, destination, transitMode, windDirDeg } = params;
-    const mapsKey = getGoogleMapsServerApiKey(process.env);
-    const googleTravelMode = mapTransitModeToGoogleTravelMode(transitMode);
-    const rawCandidates: RawRoadCandidate[] = [];
-    let routingSource: 'google_routes' | 'osrm_roads' | 'corridor_fallback' = 'corridor_fallback';
-
-    const convertGoogleRoute = (r: any, id: string, defaultLabel: string, isDefault: boolean): RawRoadCandidate | null => {
-      const encoded = r?.polyline?.encodedPolyline ?? '';
-      const decoded = decodeEncodedPolyline(encoded);
-      const steps = parseGoogleSteps(r?.legs);
-      const stepCombinedPath =
-        decoded.length >= 2
-          ? decoded
-          : steps.flatMap((s) => s.path);
-      if (stepCombinedPath.length < 2) return null;
-      const distKm =
-        Number(((r?.distanceMeters ?? 0) / 1000).toFixed(1)) || measurePathDistanceKm(stepCombinedPath);
-      const durSec = Number(String(r?.duration ?? '0s').replace('s', ''));
-      const durMin =
-        durSec > 0 ? Math.max(2, Math.round(durSec / 60)) : estimateTransitDurationMin(distKm, transitMode);
-      const transitSummary = steps
-        .filter((s) => s.transitInfo)
-        .map((s) => s.transitInfo!.shortName || s.transitInfo!.lineName)
-        .slice(0, 2)
-        .join(' → ');
-
-      const label = transitSummary
-        ? `${isDefault ? 'Transit' : 'Alt Transit'} via ${transitSummary}`
-        : r?.description
-          ? `${isDefault ? 'Primary' : 'Alt'} via ${r.description}`
-          : defaultLabel;
-
-      return {
-        id,
-        label,
-        isDefaultArterial: isDefault,
-        isRoadSnapped: true,
-        distanceKm: distKm,
-        durationMin: durMin,
-        encodedPolyline: encoded,
-        path: stepCombinedPath,
-        steps,
-      };
-    };
-
-    if (mapsKey) {
-      try {
-        let primaryRoutes = await callGoogleComputeRoutes({
-          origin,
-          destination,
-          travelMode: googleTravelMode,
-          mapsKey,
-          computeAlternativeRoutes: true,
-        });
-
-        // If TRANSIT returns 0 routes (e.g. intercity area without GTFS schedule), fall back to DRIVE Google highway route
-        let effectiveMode: GoogleTravelMode = googleTravelMode;
-        if (primaryRoutes.length === 0 && googleTravelMode === 'TRANSIT') {
-          primaryRoutes = await callGoogleComputeRoutes({
-            origin,
-            destination,
-            travelMode: 'DRIVE',
-            mapsKey,
-            computeAlternativeRoutes: true,
-          });
-          effectiveMode = 'DRIVE';
-        }
-
-        primaryRoutes.slice(0, 3).forEach((r, idx) => {
-          const isDefault = idx === 0 || (r.routeLabels ?? []).includes('DEFAULT_ROUTE');
-          const cand = convertGoogleRoute(
-            r,
-            `groute-${idx + 1}`,
-            isDefault ? 'Primary Google Corridor' : `Alternate Google Route ${idx}`,
-            isDefault
-          );
-          if (cand) rawCandidates.push(cand);
-        });
-
-        // If non-TRANSIT returned only 1 route, query a 2nd real road-snapped route via upwind `via: true` waypoint
-        if (rawCandidates.length === 1 && effectiveMode !== 'TRANSIT') {
-          const viaUpwind = computeUpwindViaWaypoint(origin, destination, windDirDeg, 1);
-          const viaRoutes = await callGoogleComputeRoutes({
-            origin,
-            destination,
-            travelMode: effectiveMode,
-            mapsKey,
-            viaWaypoint: viaUpwind,
-            computeAlternativeRoutes: false,
-          });
-          if (viaRoutes[0]) {
-            const altCand = convertGoogleRoute(
-              viaRoutes[0],
-              'groute-upwind-via',
-              'Upwind Clean-Air Highway Bypass',
-              false
-            );
-            if (altCand) rawCandidates.push(altCand);
-          }
-        }
-
-        if (rawCandidates.length > 0) {
-          routingSource = 'google_routes';
-        }
-      } catch {
-        // fall through to OSRM road fallback
-      }
+  }) => {
+    const profile = getOsrmProfile(params.transitMode);
+    if (!profile) {
+      throw new Error('Public-transport routes are unavailable until a regional GTFS transit feed is configured.');
     }
 
-    // Fallback to OSRM real road routing so we never draw a straight geodesic line when roads exist
-    if (rawCandidates.length === 0) {
-      const osrmCandidates = await fetchOsrmRoadFallback(origin, destination, transitMode);
-      if (osrmCandidates.length > 0) {
-        rawCandidates.push(...osrmCandidates);
-        routingSource = 'osrm_roads';
-      }
+    const baseUrl = process.env.OSRM_ROUTING_URL?.trim() || 'https://router.project-osrm.org';
+    const url = buildOsrmRouteUrl(baseUrl, profile, params.origin, params.destination);
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        'User-Agent': 'Vayu-Index/1.0 (+https://github.com/thismakesmefree/Vayu-Index)',
+        Referer: 'https://github.com/thismakesmefree/Vayu-Index',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`OpenStreetMap routing provider returned HTTP ${response.status}.`);
     }
 
-    // Final safety fallback if both Google Routes & OSRM fail (e.g. ocean/offline)
-    if (rawCandidates.length === 0) {
-      const geometricCorridors = buildCorridorCandidatePaths(origin, destination, windDirDeg);
-      const baseKm = Math.max(0.8, haversineKm(origin.lat, origin.lon, destination.lat, destination.lon));
-      geometricCorridors.forEach((corridor) => {
-        const distKm = Number((baseKm * corridor.detourFactor).toFixed(1));
-        rawCandidates.push({
-          id: corridor.id,
-          label: corridor.label,
-          isDefaultArterial: corridor.isDefaultArterial,
-          isRoadSnapped: false,
-          distanceKm: distKm,
-          durationMin: estimateTransitDurationMin(distKm, transitMode),
-          path: corridor.path,
-        });
-      });
+    const candidates = parseOsrmRouteCandidates(await response.json());
+    if (candidates.length === 0) {
+      throw new Error('The OpenStreetMap routing provider returned no usable route for these locations.');
     }
-
-    return { candidates: rawCandidates, googleTravelMode, routingSource };
+    return { candidates, profile, routingSource: 'osrm' as const };
   };
 
   const buildOptimizedRoutePayload = async (params: {
@@ -1544,16 +1127,12 @@ export function createApiApp(): express.Express {
       skipGeminiSummary,
     } = params;
 
+    const { candidates: rawCandidates, profile, routingSource } = await fetchOpenRouteCandidates({
+      origin,
+      destination,
+      transitMode,
+    });
     const centerSample = await sampleBatchCorridorTelemetry([origin]);
-    const avgWindDir = centerSample[0]?.windDirDeg ?? 0;
-
-    const { candidates: rawCandidates, googleTravelMode, routingSource } =
-      await fetchRoadAndTransitCandidates({
-        origin,
-        destination,
-        transitMode,
-        windDirDeg: avgWindDir,
-      });
 
     const sampledInputs: RouteCandidateInput[] = [];
     const allSamplesPoints: LatLngPoint[] = [];
@@ -1620,13 +1199,13 @@ export function createApiApp(): express.Express {
           )
           .join('\n');
 
-        const prompt = `You have live access to the Vayu Index Google Map spatial air-quality and meteorology layers for a ${
+        const prompt = `You have live access to the Vayu Index open-map air-quality and meteorology layers for a ${
           isLongRangeBackground ? 'long-range background (>100 km)' : 'regional (<=100 km)'
-        } trip from "${originLabel}" (${origin.lat.toFixed(3)}, ${origin.lon.toFixed(3)}) to "${destinationLabel}" (${destination.lat.toFixed(3)}, ${destination.lon.toFixed(3)}) via ${googleTravelMode} (${transitMode}).
+        } trip from "${originLabel}" (${origin.lat.toFixed(3)}, ${origin.lon.toFixed(3)}) to "${destinationLabel}" (${destination.lat.toFixed(3)}, ${destination.lon.toFixed(3)}) using the ${profile} route profile.
 Direct distance: ${directKm} km. Routing source: ${routingSource}.
-Surface wind at origin: ${centerSample[0]?.windKmh ?? 10} km/h from ${centerSample[0]?.windDirDeg ?? 0}°, temp ${centerSample[0]?.temperatureC ?? 20}°C, precip ${centerSample[0]?.precipMm ?? 0} mm.
+Surface wind at origin: ${centerSample[0].windKmh} km/h from ${centerSample[0].windDirDeg}°, temp ${centerSample[0].temperatureC}°C, precip ${centerSample[0].precipMm} mm.
 
-Evaluated real highway/rail route candidates from Google Maps & spatial telemetry:
+Evaluated real OpenStreetMap road-network route candidates with Open-Meteo spatial telemetry:
 ${candidateDigest}
 
 Return ONLY valid JSON with two keys:
@@ -1654,9 +1233,9 @@ Return ONLY valid JSON with two keys:
     }
 
     return {
-      distanceKm: summary.optimalRoute.distanceKm || directKm,
+      distanceKm: summary.optimalRoute.distanceKm,
       transitMode,
-      googleTravelMode,
+      routingProfile: profile,
       routingSource,
       optimalRouteId: summary.optimalRoute.id,
       baselineRouteId: summary.baselineRoute.id,
@@ -1673,7 +1252,7 @@ Return ONLY valid JSON with two keys:
     };
   };
 
-  /** Direct Google Maps multi-mode road/rail directions for instant map display (all users) */
+  /** OpenStreetMap road, cycling, and walking routes with Open-Meteo telemetry. */
   app.post('/api/maps/directions', async (req, res) => {
     const body = (req.body || {}) as {
       origin?: LatLngPoint;
@@ -1710,7 +1289,7 @@ Return ONLY valid JSON with two keys:
       res.json({ result });
     } catch (err: unknown) {
       res.status(502).json({
-        error: err instanceof Error ? err.message : 'Unable to fetch Google Maps directions.',
+        error: err instanceof Error ? err.message : 'Unable to fetch an OpenStreetMap route.',
       });
     }
   });

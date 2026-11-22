@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
-import { AlertTriangle, Bell, ExternalLink, Loader2, MapPin, Monitor, Moon, Sparkles, Sun, X } from 'lucide-react';
+import { AlertTriangle, Bell, Loader2, MapPin, Monitor, Moon, Sparkles, Sun, X } from 'lucide-react';
 import { AtmosphericBackground } from './components/AtmosphericBackground';
 import { FloatingDock } from './components/FloatingDock';
 import { LandingView } from './components/LandingView';
@@ -39,7 +39,6 @@ import {
 } from './utils/location';
 import { triggerHaptic } from './utils/haptics';
 import { sendRouteReadyNotification } from './utils/notifications';
-import { MAPS_AUTH_FAILURE_EVENT, MAPS_QUOTA_EXCEEDED_EVENT } from './utils/mapsErrors';
 import type { LatLngPoint } from './utils/routeOptimizer';
 
 const PAGE_SPRING = {
@@ -228,23 +227,10 @@ export default function App() {
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [routeAfterApiKey, setRouteAfterApiKey] = useState<AppRoute | null>(null);
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
-  const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
-  const [gmpAuthFailure, setGmpAuthFailure] = useState(false);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundRouteTask[]>([]);
   const [activeTaskResult, setActiveTaskResult] = useState<BackgroundRouteTask | null>(null);
   const [routeReadyToast, setRouteReadyToast] = useState<BackgroundRouteTask | null>(null);
   const notifiedTaskIdsRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const onQuotaExceeded = () => setGmpQuotaExceeded(true);
-    const onAuthFailure = () => setGmpAuthFailure(true);
-    window.addEventListener(MAPS_QUOTA_EXCEEDED_EVENT, onQuotaExceeded);
-    window.addEventListener(MAPS_AUTH_FAILURE_EVENT, onAuthFailure);
-    return () => {
-      window.removeEventListener(MAPS_QUOTA_EXCEEDED_EVENT, onQuotaExceeded);
-      window.removeEventListener(MAPS_AUTH_FAILURE_EVENT, onAuthFailure);
-    };
-  }, []);
 
   useEffect(() => {
     const openTaskById = (taskId: string | null) => {
@@ -586,63 +572,6 @@ export default function App() {
     >
       <AtmosphericBackground resolvedTheme={resolvedTheme} ambientGlow={aqiBand.ambientGlow} />
       <OfflineIndicator />
-
-      {gmpAuthFailure && (
-        <div
-          role="alert"
-          data-testid="gmp-auth-failure-banner"
-          className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-950/90 px-4 py-2 text-xs text-amber-200 backdrop-blur-md"
-        >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              Google Maps rejected the configured key. This is not necessarily a quota error. Check that the Maps JavaScript API is enabled, billing is active, and the website referrer and API restrictions match this deployment.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setGmpAuthFailure(false)}
-            aria-label="Dismiss Google Maps authentication warning"
-            className="rounded p-1 hover:bg-amber-500/20 cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {gmpQuotaExceeded && (
-        <div
-          role="alert"
-          data-testid="gmp-quota-banner"
-          className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-950/90 px-4 py-2 text-xs text-amber-200 backdrop-blur-md"
-        >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              Google Maps Platform demo quota reached. Switch to your own Cloud API key to continue uninterrupted map tiles.
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <a
-              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-amber-400/40 bg-amber-500/20 px-2.5 py-1 font-semibold text-amber-100 hover:bg-amber-500/30"
-            >
-              <span>Resolve Quota</span>
-              <ExternalLink className="w-3 h-3" />
-            </a>
-            <button
-              type="button"
-              onClick={() => setGmpQuotaExceeded(false)}
-              aria-label="Dismiss quota banner"
-              className="rounded p-1 hover:bg-amber-500/20 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
 
       {routeReadyToast && (
         <div

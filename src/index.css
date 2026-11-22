@@ -168,3 +168,53 @@ html:not(.dark) .vayu-glass-elevated {
     transition-duration: 0.01ms !important;
   }
 }
+
+.vayu-map-pin,
+.vayu-map-station {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 2px solid #fff;
+  border-radius: 9999px;
+  color: #fff;
+  font: 700 11px var(--font-mono);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 35%);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vayu-map-pin {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 3px 8px;
+}
+
+.vayu-map-station {
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  background: rgb(10 15 25 / 88%);
+  backdrop-filter: blur(8px);
+}
+
+.vayu-map-station-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.vayu-map-station-temperature {
+  color: #38bdf8;
+}
+
+.maplibregl-ctrl-group {
+  overflow: hidden;
+  border: 1px solid rgb(148 163 184 / 35%) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 24%) !important;
+}
+
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}

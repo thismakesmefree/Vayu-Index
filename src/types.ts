@@ -109,8 +109,8 @@ export interface JourneyExplanationPayload {
 export interface GeminiOptimizedRoutePayload {
   distanceKm: number;
   transitMode: TransitMode;
-  googleTravelMode?: 'DRIVE' | 'TRANSIT' | 'TWO_WHEELER' | 'BICYCLE' | 'WALK';
-  routingSource?: 'google_routes' | 'osrm_roads' | 'corridor_fallback';
+  routingProfile?: 'driving' | 'bike' | 'foot';
+  routingSource?: 'osrm';
   optimalRouteId: string;
   baselineRouteId: string;
   aqiReductionPercent: number;
