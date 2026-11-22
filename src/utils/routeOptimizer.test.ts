@@ -1,18 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildCorridorCandidatePaths,
   buildJourneyPointsFromRoute,
-  computeUpwindViaWaypoint,
   decodeEncodedPolyline,
   isBackgroundTaskRequired,
-  isBetaGoogleTravelMode,
-  mapTransitModeToGoogleTravelMode,
-  samplePathCoordinates,
   selectOptimalLowSmogRoute,
   SYNC_ROUTE_MAX_KM,
 } from './routeOptimizer';
-import { PAN_INDIA_AQI_STATIONS } from './indiaGrid';
+import { PAN_INDIA_AQI_POINTS } from './indiaGrid';
 
 test('isBackgroundTaskRequired triggers strictly above 100 km', () => {
   assert.equal(SYNC_ROUTE_MAX_KM, 100);
@@ -22,21 +17,7 @@ test('isBackgroundTaskRequired triggers strictly above 100 km', () => {
   assert.equal(isBackgroundTaskRequired(350), true);
 });
 
-test('mapTransitModeToGoogleTravelMode & isBetaGoogleTravelMode cover all 5 Google travel modes', () => {
-  assert.equal(mapTransitModeToGoogleTravelMode('drive'), 'DRIVE');
-  assert.equal(mapTransitModeToGoogleTravelMode('transit'), 'TRANSIT');
-  assert.equal(mapTransitModeToGoogleTravelMode('two_wheeler'), 'TWO_WHEELER');
-  assert.equal(mapTransitModeToGoogleTravelMode('cycle'), 'BICYCLE');
-  assert.equal(mapTransitModeToGoogleTravelMode('walk'), 'WALK');
-
-  assert.equal(isBetaGoogleTravelMode('drive'), false);
-  assert.equal(isBetaGoogleTravelMode('transit'), false);
-  assert.equal(isBetaGoogleTravelMode('two_wheeler'), true);
-  assert.equal(isBetaGoogleTravelMode('cycle'), true);
-  assert.equal(isBetaGoogleTravelMode('walk'), true);
-});
-
-test('decodeEncodedPolyline decodes Google Routes encoded polyline strings accurately', () => {
+test('decodeEncodedPolyline decodes OSRM precision-5 route geometry accurately', () => {
   const decoded = decodeEncodedPolyline('_p~iF~ps|U_ulLnnqC_mqNvxq`@');
   assert.equal(decoded.length, 3);
   assert.ok(Math.abs(decoded[0].lat - 38.5) < 0.001);
@@ -113,23 +94,14 @@ test('selectOptimalLowSmogRoute & buildJourneyPointsFromRoute flag diverted/modi
   assert.ok(journeyPoints.some((pt) => pt.isModified), 'Expected midpoint diversion to be marked modified');
 });
 
-test('computeUpwindViaWaypoint & buildCorridorCandidatePaths produce valid bounded waypoints', () => {
-  const via = computeUpwindViaWaypoint({ lat: 28.61, lon: 77.21 }, { lat: 28.46, lon: 77.03 }, 120);
-  assert.ok(Number.isFinite(via.lat) && Number.isFinite(via.lon));
-  const candidates = buildCorridorCandidatePaths({ lat: 37.77, lon: -122.41 }, { lat: 37.87, lon: -122.27 }, 180);
-  assert.equal(candidates.length, 3);
-  const sampled = samplePathCoordinates(candidates[1].path, 4);
-  assert.equal(sampled.length, 4);
-});
-
-test('PAN_INDIA_AQI_STATIONS covers all macro-regions across whole India', () => {
-  assert.ok(PAN_INDIA_AQI_STATIONS.length >= 50, `Expected >=50 stations, got ${PAN_INDIA_AQI_STATIONS.length}`);
-  const regions = new Set(PAN_INDIA_AQI_STATIONS.map((s) => s.region));
+test('PAN_INDIA_AQI_POINTS covers all macro-regions across whole India', () => {
+  assert.ok(PAN_INDIA_AQI_POINTS.length >= 50, `Expected >=50 sample points, got ${PAN_INDIA_AQI_POINTS.length}`);
+  const regions = new Set(PAN_INDIA_AQI_POINTS.map((point) => point.region));
   for (const required of ['North', 'West', 'Central', 'East', 'Northeast', 'South', 'Islands']) {
     assert.ok(regions.has(required as any), `Missing India region: ${required}`);
   }
-  const lats = PAN_INDIA_AQI_STATIONS.map((s) => s.lat);
-  const lons = PAN_INDIA_AQI_STATIONS.map((s) => s.lon);
+  const lats = PAN_INDIA_AQI_POINTS.map((point) => point.lat);
+  const lons = PAN_INDIA_AQI_POINTS.map((point) => point.lon);
   assert.ok(Math.max(...lats) > 33, 'Should reach Ladakh/J&K in the North');
   assert.ok(Math.min(...lats) < 10, 'Should reach Kerala/Tamil Nadu in the South');
   assert.ok(Math.min(...lons) < 71, 'Should reach Gujarat/Rajasthan in the West');

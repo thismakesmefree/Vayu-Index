@@ -4,8 +4,6 @@ import type { JourneyExplanationPoint, RouteStepSegment } from '../types.ts';
 
 export const SYNC_ROUTE_MAX_KM = 100;
 
-export type GoogleTravelMode = 'DRIVE' | 'TRANSIT' | 'TWO_WHEELER' | 'BICYCLE' | 'WALK';
-
 export interface LatLngPoint {
   lat: number;
   lon: number;
@@ -58,30 +56,7 @@ export function isBackgroundTaskRequired(distanceKm: number): boolean {
   return Number.isFinite(distanceKm) && distanceKm > SYNC_ROUTE_MAX_KM;
 }
 
-export function mapTransitModeToGoogleTravelMode(mode: TransitMode): GoogleTravelMode {
-  switch (mode) {
-    case 'walk':
-      return 'WALK';
-    case 'cycle':
-      return 'BICYCLE';
-    case 'two_wheeler':
-      return 'TWO_WHEELER';
-    case 'transit':
-    case 'metro_hybrid':
-      return 'TRANSIT';
-    case 'drive':
-    case 'ev_shuttle':
-    default:
-      return 'DRIVE';
-  }
-}
-
-export function isBetaGoogleTravelMode(mode: TransitMode): boolean {
-  const gm = mapTransitModeToGoogleTravelMode(mode);
-  return gm === 'WALK' || gm === 'BICYCLE' || gm === 'TWO_WHEELER';
-}
-
-/** Standard Google Encoded Polyline Algorithm Decoder */
+/** Decodes the precision-5 polyline geometry returned by the OSRM API. */
 export function decodeEncodedPolyline(encoded: string): LatLngPoint[] {
   if (!encoded || typeof encoded !== 'string') return [];
   const points: LatLngPoint[] = [];
@@ -130,113 +105,6 @@ export function samplePathCoordinates(path: LatLngPoint[], count = 7): LatLngPoi
     sampled.push(path[idx]);
   }
   return sampled;
-}
-
-/**
- * Computes an upwind intermediate waypoint for Google Routes API `via: true`
- * so alternate corridors stay snapped to real highways/arterials rather than straight lines.
- */
-export function computeUpwindViaWaypoint(
-  origin: LatLngPoint,
-  destination: LatLngPoint,
-  windDirDeg = 0,
-  sideSign: 1 | -1 = 1
-): LatLngPoint {
-  const midLat = (origin.lat + destination.lat) / 2;
-  const midLon = (origin.lon + destination.lon) / 2;
-  const dLat = destination.lat - origin.lat;
-  const dLon = destination.lon - origin.lon;
-  const chordLen = Math.hypot(dLat, dLon) || 0.02;
-
-  const perpLat = -dLon / chordLen;
-  const perpLon = dLat / chordLen;
-  const offsetMag = Math.min(0.28, Math.max(0.015, chordLen * 0.18));
-  const windBias = Math.cos(((windDirDeg % 360) * Math.PI) / 180) >= 0 ? 1 : -1;
-  const sign = windBias * sideSign;
-
-  return {
-    lat: Number((midLat + perpLat * offsetMag * sign).toFixed(5)),
-    lon: Number((midLon + perpLon * offsetMag * sign).toFixed(5)),
-  };
-}
-
-/**
- * Generates deterministic clean-corridor candidate polylines between origin and destination
- * (Direct, Upwind Arc, Downwind Buffer Arc) for fallback when no road/rail router is reachable.
- */
-export function buildCorridorCandidatePaths(
-  origin: LatLngPoint,
-  destination: LatLngPoint,
-  windDirDeg = 0
-): Array<{ id: string; label: string; isDefaultArterial?: boolean; path: LatLngPoint[]; detourFactor: number }> {
-  const midLat = (origin.lat + destination.lat) / 2;
-  const midLon = (origin.lon + destination.lon) / 2;
-  const dLat = destination.lat - origin.lat;
-  const dLon = destination.lon - origin.lon;
-  const chordLen = Math.hypot(dLat, dLon) || 0.02;
-
-  const perpLat = -dLon / chordLen;
-  const perpLon = dLat / chordLen;
-  const offsetMag = Math.min(0.45, Math.max(0.012, chordLen * 0.22));
-  const windBias = Math.cos(((windDirDeg % 360) * Math.PI) / 180) >= 0 ? 1 : -1;
-
-  const buildArc = (sign: number): LatLngPoint[] => [
-    origin,
-    {
-      lat: Number((origin.lat + dLat * 0.32 + perpLat * offsetMag * 0.8 * sign).toFixed(5)),
-      lon: Number((origin.lon + dLon * 0.32 + perpLon * offsetMag * 0.8 * sign).toFixed(5)),
-    },
-    {
-      lat: Number((midLat + perpLat * offsetMag * sign).toFixed(5)),
-      lon: Number((midLon + perpLon * offsetMag * sign).toFixed(5)),
-    },
-    {
-      lat: Number((origin.lat + dLat * 0.68 + perpLat * offsetMag * 0.8 * sign).toFixed(5)),
-      lon: Number((origin.lon + dLon * 0.68 + perpLon * offsetMag * 0.8 * sign).toFixed(5)),
-    },
-    destination,
-  ];
-
-  return [
-    {
-      id: 'direct-arterial',
-      label: 'Direct Arterial Corridor',
-      isDefaultArterial: true,
-      detourFactor: 1.08,
-      path: [
-        origin,
-        { lat: Number((origin.lat + dLat * 0.33).toFixed(5)), lon: Number((origin.lon + dLon * 0.33).toFixed(5)) },
-        { lat: Number((origin.lat + dLat * 0.66).toFixed(5)), lon: Number((origin.lon + dLon * 0.66).toFixed(5)) },
-        destination,
-      ],
-    },
-    {
-      id: 'upwind-bypass',
-      label: 'Upwind Clean-Air Bypass',
-      detourFactor: 1.16,
-      path: buildArc(windBias),
-    },
-    {
-      id: 'canopy-corridor',
-      label: 'Alternate Dispersion Corridor',
-      detourFactor: 1.19,
-      path: buildArc(-windBias),
-    },
-  ];
-}
-
-export function estimateTransitDurationMin(distanceKm: number, mode: TransitMode): number {
-  const speedMap: Record<TransitMode, number> = {
-    drive: 42,
-    transit: 38,
-    two_wheeler: 34,
-    walk: 4.8,
-    cycle: 16.5,
-    ev_shuttle: 32,
-    metro_hybrid: 36,
-  };
-  const speed = speedMap[mode] ?? 32;
-  return Math.max(4, Math.round((distanceKm / speed) * 60));
 }
 
 export function scoreRouteCandidate(

@@ -77,37 +77,28 @@ test('location endpoint asks Open-Meteo for up to 100 India-only matches', async
   });
 });
 
-test('reverse geocoding resolves GPS coordinates to a village name', async () => {
+test('reverse geocoding returns an explicit unknown label when its provider is unavailable', async () => {
   await withApiServer(async (baseUrl) => {
     const originalFetch = globalThis.fetch;
+    const providerRequests: string[] = [];
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = input instanceof Request ? input.url : String(input);
       if (requestUrl.startsWith('/api/location/reverse')) {
         return originalFetch(`${baseUrl}${requestUrl}`, init);
       }
+      providerRequests.push(requestUrl);
       if (requestUrl.startsWith('https://photon.komoot.io/reverse')) {
         return new Response('', { status: 503 });
-      }
-      if (requestUrl.startsWith('https://nominatim.openstreetmap.org/reverse')) {
-        return new Response(
-          JSON.stringify({
-            address: {
-              hamlet: 'Yadagirigutta',
-              state: 'Telangana',
-              country: 'India',
-            },
-          }),
-          { headers: { 'Content-Type': 'application/json' } }
-        );
       }
       return originalFetch(input, init);
     };
 
     try {
       const location = await reverseGeocodeCoords(17.5902, 78.9554);
-      assert.equal(location.label, 'Yadagirigutta, Telangana');
-      assert.equal(location.region, 'Telangana, India');
+      assert.equal(location.label, 'Nearby location');
+      assert.equal(location.region, 'Location name unavailable');
       assert.equal(/\d/.test(location.label), false);
+      assert.deepEqual(providerRequests, ['https://photon.komoot.io/reverse?lat=17.5902&lon=78.9554']);
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -1,4 +1,4 @@
-export interface IndiaAqiStation {
+export interface IndiaAqiPoint {
   id: string;
   name: string;
   state: string;
@@ -8,10 +8,10 @@ export interface IndiaAqiStation {
 }
 
 /**
- * Comprehensive 50-station Pan-India atmospheric monitoring grid
- * covering all major geographic regions from Ladakh/Kashmir to Kerala & Andaman.
+ * Sample coordinates across India for modeled AQI and weather lookups.
+ * These are not ground-monitoring station observations.
  */
-export const PAN_INDIA_AQI_STATIONS: IndiaAqiStation[] = [
+export const PAN_INDIA_AQI_POINTS: IndiaAqiPoint[] = [
   // North & Himalayan Belt
   { id: 'in-srinagar', name: 'Srinagar', state: 'J&K', region: 'North', lat: 34.0837, lon: 74.7973 },
   { id: 'in-leh', name: 'Leh', state: 'Ladakh', region: 'North', lat: 34.1526, lon: 77.5771 },
